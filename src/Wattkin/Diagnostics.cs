@@ -16,7 +16,10 @@ public static class Diagnostics
 
     public static void Run(string? path)
     {
-        path ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Wattkin", "diagnostics.txt");
+        // No file given ("--diagnose" alone passes ""), or a bare file name: the default folder / the current one.
+        path = string.IsNullOrWhiteSpace(path)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Wattkin", "diagnostics.txt")
+            : Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var sb = new StringBuilder();
         void Line(string text) => sb.AppendLine(text);
@@ -70,7 +73,11 @@ public static class Diagnostics
         });
 
         Try("dGPU", () => Line($"dGPU: {DiscreteGpu.Query()}"));
-        Try("Display", () => Line($"Display: current {DisplayModes.CurrentRefreshRate()} Hz, available {string.Join(", ", DisplayModes.SupportedRefreshRates())}"));
+        Try("Keyboard light", () => Line(MysticLight.Find() is { } light
+            ? $"Keyboard light (USB): {light.Product} · usage page 0x{light.UsagePage:X4} · feature report {light.FeatureReportLength} bytes · {(light.Usable ? "used by Wattkin" : "unknown layout, not used")}"
+            : "Keyboard light (USB): no Mystic Light controller (the keys are lit by the EC, if at all)"));
+        Try("Display", () => Line($"Display: current {DisplayModes.CurrentRefreshRate()} Hz, available {string.Join(", ", DisplayModes.SupportedRefreshRates())} · built-in panel {DisplayModes.InternalDisplay() ?? "not found"} · outputs {DisplayModes.DescribeOutputs()}"));
+        Try("Screen", () => Line($"Screen: backlight {(Backlight.Get() is { } b ? $"{b}%" : "not controllable")} · Windows gamma range {(GammaRamp.Limited() ? "limited" : "full")} · f.lux {(System.Diagnostics.Process.GetProcessesByName("flux").Length > 0 ? "running" : "not running")}"));
         Try("Power", () => Line($"Windows power mode: AC {WindowsPower.GetMode(true)}, DC {WindowsPower.GetMode(false)} · CPU boost AC {WindowsPower.GetCpuBoost(true)}, DC {WindowsPower.GetCpuBoost(false)} · critical battery {WindowsPower.CriticalBatteryPercent()}%"));
         // msiexec is Windows Installer, not MSI's.
         Try("MSI processes", () => Line("MSI processes running: " + string.Join(", ", Process.GetProcesses().Where(p => (p.ProcessName.Contains("MSI", StringComparison.OrdinalIgnoreCase) && !p.ProcessName.Equals("msiexec", StringComparison.OrdinalIgnoreCase)) || p.ProcessName.StartsWith("OmAp", StringComparison.OrdinalIgnoreCase)).Select(p => p.ProcessName).Distinct())));

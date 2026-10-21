@@ -88,6 +88,17 @@ internal static class Installation
         });
         Step("laptop controller", ResetHardware);
         Step("WMI classes", global::Wattkin.Hardware.WmiSchema.Remove); // after the controller, which needs them
+        Step("screen", () =>
+        {
+            // The running copy put the normal picture back as it exited; only the range setting is left.
+            // The flag goes too, so a reinstall's uninstall doesn't remove a value someone else set since.
+            var store = new SettingsStore();
+            if (store.Current.ScreenGammaRangeSet)
+            {
+                GammaRamp.RemoveFullRange();
+                store.Update(s => s.ScreenGammaRangeSet = false);
+            }
+        });
         Step("logon task", () => StartupTask.Disable());
         Step("shortcuts", () =>
         {
@@ -113,8 +124,21 @@ internal static class Installation
         {
             if (RunningInstalled)
             {
-                // This exe is the one being removed: delete the folder just after it exits.
-                Process.Start(new ProcessStartInfo("cmd.exe", $"/c ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{Folder}\"") { CreateNoWindow = true, UseShellExecute = false });
+                // This exe is the one being removed: delete the folder once it has exited, and the copy
+                // that launched it (waiting for it, non-elevated) too. A fixed two-second wait left the
+                // exe behind whenever the "Wattkin has been removed" message was read for longer.
+                var waitFor = string.Join(",", new[] { Environment.ProcessId, ParentWattkin() ?? 0 }.Where(id => id > 0));
+                var folder = Folder.Replace("'", "''", StringComparison.Ordinal);
+                var script = $"Wait-Process -Id {waitFor} -Timeout 600 -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500; Remove-Item -LiteralPath '{folder}' -Recurse -Force -ErrorAction SilentlyContinue";
+                // By full path, from System32: elevated, a powershell.exe in the current folder mustn't be the one run
+                // (and a current folder inside Program Files\Wattkin would keep it from being removed).
+                var powershell = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
+                Process.Start(new ProcessStartInfo(powershell, $"-NoProfile -NonInteractive -WindowStyle Hidden -Command \"{script}\"")
+                {
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    WorkingDirectory = Environment.SystemDirectory,
+                });
             }
             else if (Directory.Exists(Folder))
             {
@@ -144,7 +168,12 @@ internal static class Installation
         ec.SetSimulatedUnplug(false);
         ec.SetChargeLimit(100);
         ec.SetCoolerBoost(false);
-        if (new SettingsStore(readOnly: true).Current.FactoryFanCurve is { } factory && ec.HasFanCurves)
+        var settings = new SettingsStore(readOnly: true).Current;
+        if (settings.FactoryFanTable is { } table && ec.HasFullFanTable)
+        {
+            ec.WriteFullFanTable(table, unrestricted: true); // what the laptop held before Wattkin, whatever it was
+        }
+        else if (settings.FactoryFanCurve is { } factory && ec.HasFanCurves)
         {
             ec.WriteFanTable(factory);
         }
@@ -243,9 +272,12 @@ internal static class Installation
     /// <summary>Asks a running copy to exit cleanly (it releases the hardware first), then makes sure it has.</summary>
     public static void StopRunningCopy()
     {
-        // Only the installed copy: the window that launched this installer is a "Wattkin" too.
+        // Only the installed copy: the window that launched this installer is a "Wattkin" too, and so is
+        // the non-elevated copy waiting for this elevated one (e.g. "--uninstall" from Settings › Apps),
+        // which used to be killed after the 10-second wait.
         var self = Environment.ProcessId;
-        Process[] Others() => [.. Process.GetProcessesByName("Wattkin").Where(p => p.Id != self && IsInstalledCopy(p))];
+        var parent = ParentProcessId();
+        Process[] Others() => [.. Process.GetProcessesByName("Wattkin").Where(p => p.Id != self && p.Id != parent && IsInstalledCopy(p))];
         if (Others().Length == 0)
         {
             return;
@@ -269,6 +301,28 @@ internal static class Installation
             {
             }
         }
+    }
+
+    /// <summary>The installed Wattkin that started this one and waits for it, or null (started by Windows' Settings, a script…).</summary>
+    private static int? ParentWattkin()
+    {
+        try
+        {
+            return ParentProcessId() is { } id && IsInstalledCopy(Process.GetProcessById(id)) ? id : null;
+        }
+        catch (ArgumentException)
+        {
+            return null; // already gone
+        }
+    }
+
+    /// <summary>The process that started this one (UAC elevation keeps the launcher as the parent), or null.</summary>
+    private static int? ParentProcessId()
+    {
+        var info = default(Native.NtDll.ProcessBasicInformation);
+        return Native.NtDll.NtQueryInformationProcess(Process.GetCurrentProcess().Handle, Native.NtDll.ProcessBasicInformationClass, ref info, System.Runtime.InteropServices.Marshal.SizeOf<Native.NtDll.ProcessBasicInformation>(), out _) == 0
+            ? (int)info.InheritedFromUniqueProcessId
+            : null;
     }
 
     private static bool IsInstalledCopy(Process process)

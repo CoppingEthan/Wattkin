@@ -16,6 +16,7 @@ public sealed class FanCurveEditor : StackPanel
     private readonly Slider[] _gpu = new Slider[FanSpeeds.Steps];
     private readonly Grid _cpuGrid = new();
     private readonly Grid _gpuGrid = new();
+    private readonly TextBlock _gpuHeader = Header("GPU fan", top: 10);
     private FanCurves? _firmware;
     private bool _loading;
 
@@ -23,7 +24,7 @@ public sealed class FanCurveEditor : StackPanel
     {
         Children.Add(Header("CPU fan"));
         Children.Add(_cpuGrid);
-        Children.Add(Header("GPU fan", top: 10));
+        Children.Add(_gpuHeader);
         Children.Add(_gpuGrid);
     }
 
@@ -44,6 +45,9 @@ public sealed class FanCurveEditor : StackPanel
         {
             Build(_cpuGrid, _cpu, firmware.Cpu, speeds.Cpu);
             Build(_gpuGrid, _gpu, firmware.Gpu, speeds.Gpu);
+
+            // A laptop with one fan: no GPU row (its table is all zeros and never written).
+            _gpuHeader.Visibility = _gpuGrid.Visibility = firmware.HasGpuFan ? Visibility.Visible : Visibility.Collapsed;
         }
         finally
         {
@@ -66,9 +70,10 @@ public sealed class FanCurveEditor : StackPanel
         }
 
         // The fixed hottest step can't be slower than the one below it.
-        foreach (var (name, speeds, top) in new[] { ("CPU", value.Cpu, firmware.Cpu.Speeds[^1]), ("GPU", value.Gpu, firmware.Gpu.Speeds[^1]) })
+        foreach (var (name, speeds, table) in new[] { ("CPU", value.Cpu, firmware.Cpu), ("GPU", value.Gpu, firmware.Gpu) })
         {
-            if (speeds[^1] > top)
+            var top = table.Speeds[^1];
+            if (!table.Absent && speeds[^1] > top)
             {
                 return $"The {name} fan can't be faster than {top}% here: the hottest step is fixed at {top}%.";
             }

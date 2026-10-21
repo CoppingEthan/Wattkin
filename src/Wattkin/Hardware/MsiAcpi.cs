@@ -227,6 +227,18 @@ public sealed class MsiAcpi : IDisposable
                     owned = true;
                 }
 
+                // The firmware's handler isn't re-entrant: without the machine-wide lock (another process
+                // stuck in a call), this call fails rather than run alongside it.
+                if (!owned)
+                {
+                    if (_failuresLogged++ < 20)
+                    {
+                        Log.Warn($"Firmware call {method} skipped: another process held the firmware interface for over 2 s.");
+                    }
+
+                    return null;
+                }
+
                 if (_broken && !Reconnect())
                 {
                     return null;

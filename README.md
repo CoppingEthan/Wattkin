@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-A small tray app that replaces MSI Center on MSI laptops. It shows how many watts your laptop is using right in the taskbar, and controls the things worth controlling: charge limits, battery calibration, performance and fan modes, the keyboard light, the special keys and the NVIDIA GPU. No background services, no account and no telemetry.
+A small tray app that replaces MSI Center on MSI laptops. It shows how many watts your laptop is using right in the taskbar, and controls the things worth controlling: charge limits, battery calibration, performance and fan modes, the keyboard light, screen brightness, the special keys and the NVIDIA GPU. No background services, no account and no telemetry.
 
 | | MSI Center | Wattkin |
 | --- | --- | --- |
@@ -47,10 +47,11 @@ You don't need MSI Center, and you never need to install it. If it's already on 
 - **Watts at a glance** - What the whole laptop is drawing right now, in the tray icon, a flyout and an optional desktop widget, with the battery time left.
 - **Charge limits** - Stop charging anywhere from 10% to 100%, charge to 100% once for a long day away, or bring the battery down to the limit while plugged in.
 - **Battery health** - Capacity, health and history, plus MSI's calibration for when the battery gauge drifts.
-- **Profiles** - CPU power, fans, Windows power mode, turbo, refresh rate and keyboard light, each set separately. Profiles switch by themselves when you plug in or unplug. On the Prestige 16 Studio, Quiet keeps the fans off until the CPU reaches 60°C.
-- **Fan profiles** - Make named fan curves, each fan's speed at each of the laptop's temperature steps, and pick one in any profile. Fans can also be set to full speed, or off (experimental). Safety rules keep the fans ahead of the heat unless you accept the experimental mode, if you'd rather let the laptop run hot and throttle.
+- **Profiles** - CPU power (including MSI's Sport mode where the laptop has it), fans, Windows power mode, turbo, maximum state and frequency, performance or efficiency, refresh rate and keyboard light, each set separately or left as it is. Profiles switch by themselves when you plug in or unplug, or when the battery runs low. On the Prestige 16 Studio, Quiet keeps the fans off until the CPU reaches 60°C.
+- **Fan profiles** - Make named fan curves, each fan's speed at each of the laptop's temperature steps, and pick one in any profile. On laptops where Wattkin writes the whole fan table (the Stealth 15M A11UEK), the temperatures too. Fans can also be set to full speed, or off (experimental). Safety rules keep the fans ahead of the heat unless you accept the experimental mode, if you'd rather let the laptop run hot and throttle.
+- **Screen brightness** - Alt+Page Down and Alt+Page Up, or a slider in the flyout. Below the lowest brightness it keeps going with an extra dim, like f.lux, for working in the dark.
 - **Monitoring** - CPU, Intel graphics and RTX load and watts, temperatures, fans, RAM and disk.
-- **Keyboard and keys** - Backlight brightness and auto-off. The mic-mute key, the mute lights and the MSI keys keep working without MSI Center.
+- **Keyboard and keys** - Backlight brightness and auto-off, and the colour on RGB keyboards lit by Mystic Light. The mic-mute key, the mute lights and the MSI keys keep working without MSI Center.
 - **NVIDIA GPU** - See whether the RTX is asleep or working, and switch between Hybrid and Integrated-only.
 - **Simple and Expert settings** - One simple page for everyday use, and an Expert view with every control and a Debug tab for fan tests and diagnostics.
 
@@ -77,10 +78,12 @@ You don't need MSI Center, and you never need to install it. If it's already on 
 | Laptops | What works |
 | --- | --- |
 | MSI Prestige 16 Studio A13VE | Everything, tested on the real laptop |
+| MSI Stealth 15M A11UEK (EC `1563EMS1.115`) | Everything the laptop has, with whole fan tables (temperatures too) and its Mystic Light keyboard. Passed the hardware self-test on the real laptop |
+| MSI Prestige 13 AI Evo A1MG | Working, from a user's report (one fan) |
 | Other recent MSI laptops, including those known to the Linux [msi-ec](https://github.com/BeardOverflow/msi-ec) project | Everything the laptop supports, after a safety check at startup |
 | Older MSI laptops, the newest MSI laptops (firmware interface version 3), and other brands | Watts, battery and system readings, without hardware controls |
 
-Only the Prestige 16 Studio has been tested so far. If you try Wattkin on another MSI laptop, please [open an issue](https://github.com/CoppingEthan/Wattkin/issues/new/choose) with a diagnostics report. When hardware controls aren't available, the flyout has a button that saves one to your desktop.
+If you try Wattkin on another MSI laptop, please [open an issue](https://github.com/CoppingEthan/Wattkin/issues/new/choose) with a diagnostics report. When hardware controls aren't available, the flyout has a button that saves one to your desktop.
 
 ## How it works
 
@@ -95,9 +98,13 @@ You need the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). I
 ```powershell
 git clone https://github.com/CoppingEthan/Wattkin.git
 cd Wattkin
-.\build.ps1     # runs the tests, then builds .\dist\Wattkin.exe
-.\install.ps1   # installs your build
+powershell -ExecutionPolicy Bypass -File .\build.ps1     # runs the tests, then builds .\dist\Wattkin.exe
+powershell -ExecutionPolicy Bypass -File .\install.ps1   # installs your build
 ```
+
+`-ExecutionPolicy Bypass` is only needed where Windows blocks scripts, and applies to that run only. If you publish a fork, set `WattkinUpdates` to `false` in `src\Wattkin\Wattkin.csproj`, so this repository's releases don't replace your builds.
+
+`powershell -ExecutionPolicy Bypass -File .\tools\selftest.ps1` checks a build against the laptop: read-only checks first, then (after a prompt) tests that change each setting and put it back, then the power each performance mode allows under load. Close Wattkin first. Reports are saved in `%LOCALAPPDATA%\Wattkin\selftest`.
 
 ## Tech Stack
 
@@ -116,7 +123,9 @@ This project was built with AI coding agents. I came up with the idea, the featu
 
 ## Credits
 
-The hardware knowledge builds on [msi-ec](https://github.com/BeardOverflow/msi-ec), the Linux `msi-wmi-platform` driver documentation, [MControlCenter](https://github.com/dmitry-s93/MControlCenter) and [MsiGT](https://github.com/tim-rue/MsiGT). MSI Center's behaviour was studied from the copy installed on my own laptop, for interoperability, with [ILSpy](https://github.com/icsharpcode/ILSpy) used to read its .NET modules.
+The hardware knowledge builds on [msi-ec](https://github.com/BeardOverflow/msi-ec), the Linux `msi-wmi-platform` driver documentation, [MControlCenter](https://github.com/dmitry-s93/MControlCenter), [MsiGT](https://github.com/tim-rue/MsiGT), [YAMDCC](https://codeberg.org/Sparronator9999/YAMDCC) (whole fan tables) and [OpenRGB](https://gitlab.com/CalcProgrammer1/OpenRGB) (the Mystic Light keyboard). MSI Center's behaviour was studied from the copy installed on my own laptop, for interoperability, with [ILSpy](https://github.com/icsharpcode/ILSpy) used to read its .NET modules.
+
+Stealth 15M support, whole fan tables, the Mystic Light keyboard and the hardware self-test come from Romain's fork, [Balmor40/Wattkin](https://github.com/Balmor40/Wattkin).
 
 Wattkin is not affiliated with or endorsed by MSI.
 

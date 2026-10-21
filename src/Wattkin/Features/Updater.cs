@@ -52,7 +52,16 @@ internal sealed class Updater : IDisposable
     public event Action? Changed;
 
     /// <summary>Updates replace the copy in Program Files, so only that copy, running as administrator, installs them.</summary>
-    public static bool CanInstall => Installation.RunningInstalled && Elevation.IsElevated;
+    public static bool CanInstall => Installation.RunningInstalled && Elevation.IsElevated && Enabled;
+
+    /// <summary>
+    /// False in a fork's build that turned updates off (WattkinUpdates in Wattkin.csproj): CoppingEthan's
+    /// releases would otherwise replace it as soon as one had a higher version.
+    /// </summary>
+    public static bool Enabled { get; } = !string.Equals(
+        typeof(Updater).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyMetadataAttribute), false)
+            .OfType<System.Reflection.AssemblyMetadataAttribute>().FirstOrDefault(a => a.Key == "WattkinUpdates")?.Value,
+        "false", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The hourly tick and "Check now". Checks GitHub when a day has passed (always when asked), and with
@@ -68,6 +77,12 @@ internal sealed class Updater : IDisposable
         try
         {
             var settings = _store.Current;
+            if (!Enabled)
+            {
+                Set(UpdatePhase.Idle, "Updates are turned off in this build.", null);
+                return;
+            }
+
             if (!userAsked && !settings.AutoUpdate)
             {
                 return;
@@ -81,7 +96,7 @@ internal sealed class Updater : IDisposable
 
             if (State.Available is { } release && settings.AutoUpdate && CanInstall && _safeToRestart())
             {
-                await InstallAsync(release);
+                await InstallAsync(release, automatic: true);
             }
         }
         catch (Exception ex)
@@ -105,7 +120,7 @@ internal sealed class Updater : IDisposable
 
         try
         {
-            await InstallAsync(release);
+            await InstallAsync(release, automatic: false);
         }
         finally
         {
@@ -148,7 +163,11 @@ internal sealed class Updater : IDisposable
         Set(UpdatePhase.Available, $"Wattkin {release.Version.ToString(3)} is available. {when}".Trim(), release);
     }
 
-    private async Task InstallAsync(ReleaseInfo release)
+    /// <param name="automatic">
+    /// Not asked for by the user: restarting must still be harmless once the download is done (a slow
+    /// one gives time to open Settings or start a calibration). If it isn't, the next hourly tick retries.
+    /// </param>
+    private async Task InstallAsync(ReleaseInfo release, bool automatic)
     {
         if (!CanInstall)
         {
@@ -171,6 +190,12 @@ internal sealed class Updater : IDisposable
         {
             Log.Warn($"Update {version} failed its signature check; not installed.");
             Set(UpdatePhase.Failed, $"Wattkin {version} failed its signature check, so it wasn't installed.", null);
+            return;
+        }
+
+        if (automatic && !_safeToRestart())
+        {
+            Set(UpdatePhase.Available, $"Wattkin {version} is available. It installs by itself when Wattkin's windows are closed.", release);
             return;
         }
 

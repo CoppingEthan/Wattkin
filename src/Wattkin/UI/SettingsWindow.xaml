@@ -118,6 +118,7 @@
                             <StackPanel>
                                 <TextBlock Text="Automatic switching" Style="{StaticResource Lc.Section}" />
                                 <CheckBox x:Name="AutoSwitch" Content="Switch profile when the charger is plugged in or unplugged" Click="OnAutoChanged" />
+                                <TextBlock Style="{StaticResource Lc.Hint}" Margin="0,0,0,4" Text="Each rule can also leave the profile as it is." />
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <TextBlock Text="On the charger" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="AcProfile" Grid.Column="1" SelectionChanged="OnAutoChanged" /></Grid>
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
@@ -146,6 +147,11 @@
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <TextBlock Text="Max CPU state" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PMaxCpu" Grid.Column="1" /></Grid>
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                    <TextBlock Text="Max CPU frequency" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PMaxFreq" Grid.Column="1" /></Grid>
+                                <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                    <TextBlock Text="Performance or efficiency" Style="{StaticResource Lc.Label}" ToolTip="Windows' energy performance preference (EPP)" /><ComboBox x:Name="PEpp" Grid.Column="1" /></Grid>
+                                <TextBlock Style="{StaticResource Lc.Hint}" Margin="180,0,0,0" TextWrapping="Wrap" Text="Turbo, max state, frequency and performance-or-efficiency are settings of Windows' active power plan. A max state below 100% also stops turbo; a frequency cap keeps some turbo. Performance-or-efficiency is how eagerly the processor speeds up for everyday work (Windows' 'Best power efficiency' mode may override it on battery)." />
+                                <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <TextBlock Text="Display refresh rate" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PRefresh" Grid.Column="1" /></Grid>
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <TextBlock Text="Keyboard light" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PKeyboard" Grid.Column="1" /></Grid>
@@ -166,8 +172,8 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                 <DockPanel Width="220" Margin="0,0,12,0">
                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
-                        <Button x:Name="FanNewButton" Content="New" Click="OnFanProfileNew" Margin="0,0,6,0" />
-                        <Button x:Name="FanDuplicateButton" Content="Duplicate" Click="OnFanProfileDuplicate" Margin="0,0,6,0" />
+                        <Button x:Name="FanNewButton" Content="New" Click="OnFanProfileNew" Margin="0,0,6,0" IsEnabled="False" />
+                        <Button x:Name="FanDuplicateButton" Content="Duplicate" Click="OnFanProfileDuplicate" Margin="0,0,6,0" IsEnabled="False" />
                         <Button x:Name="FanDeleteButton" Content="Delete" Click="OnFanProfileDelete" />
                     </StackPanel>
                     <ListBox x:Name="FanProfileList" SelectionChanged="OnFanProfileSelected" />
@@ -182,6 +188,8 @@
                                     <Grid x:Name="FanNameRow" Style="{StaticResource Row}" Margin="0,0,0,10"><Grid.ColumnDefinitions><ColumnDefinition Width="120" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                         <TextBlock Text="Name" Style="{StaticResource Lc.Label}" /><TextBox x:Name="FanName" Grid.Column="1" /></Grid>
                                     <ui:FanCurveEditor x:Name="FanEditor" />
+                                    <!-- Laptops whose whole fan table Wattkin writes: temperatures too. -->
+                                    <ui:FanTableEditor x:Name="FanTableEditor" Visibility="Collapsed" />
                                     <TextBlock x:Name="FanProblem" Foreground="{DynamicResource Lc.Bad}" TextWrapping="Wrap" Margin="0,8,0,0" Visibility="Collapsed" />
                                     <StackPanel x:Name="FanSaveButtons" Orientation="Horizontal" Margin="0,12,0,0">
                                         <Button Content="Save" Click="OnFanProfileSave" MinWidth="80" Margin="0,0,8,0" />
@@ -210,9 +218,17 @@
                         <StackPanel>
                             <TextBlock Text="Keyboard backlight" Style="{StaticResource Lc.Section}" />
                             <WrapPanel x:Name="KbLevelPanel" Margin="0,0,0,10" />
+                            <!-- Colour: only where the keys are lit by an RGB controller over USB (Mystic Light). -->
+                            <StackPanel x:Name="KbColorSection" Margin="0,0,0,10">
+                                <TextBlock Text="Colour" Style="{StaticResource Lc.Label}" Margin="0,0,0,6" />
+                                <WrapPanel x:Name="KbColorPanel" />
+                            </StackPanel>
                             <TextBlock Text="Turn off when not typing" Style="{StaticResource Lc.Label}" Margin="0,0,0,6" />
-                            <WrapPanel x:Name="KbTimeoutPanel" />
-                            <TextBlock Style="{StaticResource Lc.Hint}" Margin="0,8,0,0" Text="Auto-off is built into the keyboard controller: the light goes off after about 10 seconds without typing and comes back on with a key press. The controller turns auto-off back on every boot, so Wattkin re-applies your choice at startup and after sleep." />
+                            <StackPanel Orientation="Horizontal">
+                                <WrapPanel x:Name="KbTimeoutPanel" />
+                                <Border x:Name="KbDelayHost" Margin="10,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <TextBlock x:Name="KbTimeoutHint" Style="{StaticResource Lc.Hint}" Margin="0,8,0,0" Text="Auto-off is built into the keyboard controller: the light goes off after about 10 seconds without typing and comes back on with a key press. The controller turns auto-off back on every boot, so Wattkin re-applies your choice at startup and after sleep." />
                         </StackPanel>
                     </Border>
                     <Border Style="{StaticResource Lc.Card}">
@@ -235,10 +251,24 @@
             </ScrollViewer>
         </TabItem>
 
-        <!-- ================= Graphics ================= -->
-        <TabItem Header="Graphics" Tag="graphics">
+        <!-- ================= Screen & graphics ================= -->
+        <TabItem Header="Screen &amp; graphics" Tag="graphics">
             <ScrollViewer CanContentScroll="False" VerticalScrollBarVisibility="Auto" Padding="4,8,12,8">
                 <StackPanel>
+                    <Border Style="{StaticResource Lc.Card}">
+                        <StackPanel>
+                            <TextBlock Text="Screen brightness" Style="{StaticResource Lc.Section}" />
+                            <Grid Style="{StaticResource Row}">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="170" /><ColumnDefinition Width="*" /><ColumnDefinition Width="120" /></Grid.ColumnDefinitions>
+                                <TextBlock Text="Brightness" Style="{StaticResource Lc.Label}" />
+                                <Slider x:Name="ScreenSlider" Grid.Column="1" Minimum="-90" Maximum="100" SmallChange="5" LargeChange="10" IsMoveToPointEnabled="True" ValueChanged="OnScreenSlider" />
+                                <TextBlock x:Name="ScreenValue" Grid.Column="2" Style="{StaticResource Lc.Value}" HorizontalAlignment="Right" FontWeight="SemiBold" />
+                            </Grid>
+                            <CheckBox x:Name="ScreenKeysToggle" Content="Alt+Page Down dims and Alt+Page Up brightens, from anywhere" Click="OnScreenKeys" Margin="0,6,0,0" />
+                            <TextBlock x:Name="ScreenProblem" Foreground="{DynamicResource Lc.Warn}" TextWrapping="Wrap" Margin="0,6,0,0" Visibility="Collapsed" />
+                            <TextBlock Style="{StaticResource Lc.Hint}" Margin="0,8,0,0" TextWrapping="Wrap" Text="From 0 to 100% this is the screen's own brightness, the same as Windows' slider and the Fn keys, and lower saves power. Below 0% is extra dim, like f.lux: the picture itself gets darker than the lowest setting, on every screen. Extra dim doesn't save power, doesn't work while HDR is on, and needs f.lux closed (they'd both change the same thing). Wattkin keeps it through a restart for half a day, and puts the screen back to normal when you exit." />
+                        </StackPanel>
+                    </Border>
                     <Border Style="{StaticResource Lc.Card}">
                         <StackPanel>
                             <TextBlock Text="NVIDIA GPU right now" Style="{StaticResource Lc.Section}" />

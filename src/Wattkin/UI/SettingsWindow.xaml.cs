@@ -17,17 +17,21 @@ public partial class SettingsWindow : Window
     private bool _expert;
     private Profile? _editing;
     private IReadOnlyList<CapacityPoint> _history = [];
+    private readonly AutoOffDelayStepper _kbDelay = new();
+    private ColorSwatches? _kbColors;
 
     public SettingsWindow()
     {
         InitializeComponent();
         FanEditor.Changed += UpdateFanProblem;
+        FanTableEditor.Changed += UpdateFanProblem;
         Simple.ExpertRequested += () => SetView(expert: true, save: true);
         SourceInitialized += (_, _) => WindowEffects.SetDarkTitleBar(new WindowInteropHelper(this).Handle);
         var app = App.Current;
         app.Hardware.StateChanged += OnHardwareChanged;
         app.Hardware.FanTestChanged += OnFanTestChanged;
         app.Store.Changed += OnStoreChanged;
+        app.Screen.Changed += OnScreenChanged;
         app.Monitor.Demand(this, fast: true);
         if (app.Updates is { } updates)
         {
@@ -41,6 +45,7 @@ public partial class SettingsWindow : Window
             app.Hardware.StateChanged -= OnHardwareChanged;
             app.Hardware.FanTestChanged -= OnFanTestChanged;
             app.Store.Changed -= OnStoreChanged;
+            app.Screen.Changed -= OnScreenChanged;
             app.Monitor.Demand(this, fast: false);
             if (app.Updates is { } updates)
             {
@@ -66,13 +71,21 @@ public partial class SettingsWindow : Window
         }
 
         RefreshUpdates();
+        RefreshScreen();
         _ = LoadHistoryAsync();
         _ = LoadFanProfilesAsync();
         _ = RefreshStartupTaskAsync();
+        _ = app.Screen.RefreshAsync();
         app.Hardware.SafeRefreshStateAsync();
     }
 
     private void OnHardwareChanged() => Dispatcher.BeginInvoke(RefreshFromState);
+
+    private void OnScreenChanged() => Dispatcher.BeginInvoke(() =>
+    {
+        RefreshScreen();
+        Simple.RefreshState();
+    });
 
     /// <summary>
     /// Live readings while open; per-app CPU only while the System tab (Expert) is showing, and the
@@ -109,7 +122,9 @@ public partial class SettingsWindow : Window
 
         var state = updates.State;
         Simple.RefreshUpdates(state);
-        UpdateStatus.Text = Features.Updater.CanInstall ? state.Message : "Updates install into the copy in Program Files. Install Wattkin to get them.";
+        UpdateStatus.Text = !Features.Updater.Enabled ? "Updates are turned off in this build."
+            : Features.Updater.CanInstall ? state.Message
+            : "Updates install into the copy in Program Files. Install Wattkin to get them.";
         CheckUpdatesButton.IsEnabled = state.Phase is not (Features.UpdatePhase.Checking or Features.UpdatePhase.Installing);
         InstallUpdateButton.Visibility = state.Available is not null && Features.Updater.CanInstall ? Visibility.Visible : Visibility.Collapsed;
         InstallUpdateButton.IsEnabled = state.Phase != Features.UpdatePhase.Installing;
@@ -225,18 +240,65 @@ public partial class SettingsWindow : Window
             return;
         }
 
-        var extra = Item(tag switch { int hz when box.Name == "PRefresh" => $"{hz} Hz (not available right now)", int v => $"{v}%", _ => tag.ToString() ?? "?" }, tag);
+        var extra = Item(tag switch
+        {
+            int hz when box.Name == "PRefresh" => $"{hz} Hz (not available right now)",
+            int mhz when box.Name == "PMaxFreq" => $"{mhz / 1000.0:0.0#} GHz",
+            int epp when box.Name == "PEpp" => $"{epp}",
+            ShiftMode.Sport => "Sport (not offered on this laptop)",
+            int v => $"{v}%",
+            _ => tag.ToString() ?? "?",
+        }, tag);
         box.Items.Add(extra);
         box.SelectedItem = extra;
     }
 
     private static T? TagOf<T>(ComboBox box) => box.SelectedItem is ComboBoxItem { Tag: T value } ? value : default;
 
-    private void BuildChoices()
+    private bool? _shiftChoicesSport;
+
+    /// <summary>The CPU power list: Sport only where the laptop has it (known once the hardware has been read).</summary>
+    private void RebuildShiftChoices(bool sport)
     {
+        if (_shiftChoicesSport == sport)
+        {
+            return;
+        }
+
+        _shiftChoicesSport = sport;
+        var selected = PShift.SelectedItem as ComboBoxItem;
+        PShift.Items.Clear();
+        PShift.Items.Add(Item("Unchanged (for limits set in the BIOS or ThrottleStop)", null));
         PShift.Items.Add(Item("Eco: lowest power (MSI \"Super Battery\")", ShiftMode.Eco));
         PShift.Items.Add(Item("Balanced (MSI \"Balanced\" / \"Silent\")", ShiftMode.Balanced));
+        if (sport)
+        {
+            PShift.Items.Add(Item("Sport: between Balanced and Extreme", ShiftMode.Sport));
+        }
+
         PShift.Items.Add(Item("Extreme: highest power limits", ShiftMode.Turbo));
+        var loading = _selectingProfile;
+        _selectingProfile = true;
+        Select(PShift, selected is not null ? selected.Tag : _editing?.Performance); // an unsaved choice stays
+        _selectingProfile = loading;
+    }
+
+    private void BuildChoices()
+    {
+        RebuildShiftChoices(sport: false);
+
+        PMaxFreq.Items.Add(Item("Unchanged", null));
+        PMaxFreq.Items.Add(Item("No cap", (int?)0));
+        foreach (var mhz in new[] { 1500, 1800, 2000, 2200, 2400, 2600, 2800, 3000, 3300, 3600, 4000, 4400 })
+        {
+            PMaxFreq.Items.Add(Item($"{mhz / 1000.0:0.0#} GHz", (int?)mhz));
+        }
+
+        PEpp.Items.Add(Item("Unchanged", null));
+        foreach (var (value, text) in new[] { (0, "0: performance first"), (20, "20"), (33, "33"), (50, "50: balanced"), (70, "70"), (85, "85"), (100, "100: efficiency first") })
+        {
+            PEpp.Items.Add(Item(text, (int?)value));
+        }
 
         // PFan: built from the fan profiles in LoadSettings (RebuildFanChoices).
 
@@ -303,7 +365,10 @@ public partial class SettingsWindow : Window
             FanForcePanel.Children.Add(button);
         }
 
-        (string Text, KeyboardTimeout Value)[] timeouts = [("Always on", KeyboardTimeout.AlwaysOn), ("Auto-off after 10 s", KeyboardTimeout.AutoOff), ("Auto-off on battery only", KeyboardTimeout.AutoOffOnBattery)];
+        _kbColors = new ColorSwatches(KbColorPanel, "settingsKbColor");
+        KbDelayHost.Child = _kbDelay.Control;
+
+        (string Text, KeyboardTimeout Value)[] timeouts = [("Always on", KeyboardTimeout.AlwaysOn), ("Auto-off", KeyboardTimeout.AutoOff), ("Auto-off on battery only", KeyboardTimeout.AutoOffOnBattery)];
         foreach (var (text, value) in timeouts)
         {
             var button = new RadioButton { Content = text, Style = (Style)FindResource("Lc.Segment"), GroupName = "kbt", Tag = value };
@@ -352,24 +417,24 @@ public partial class SettingsWindow : Window
 
                 foreach (var box in new[] { AcProfile, DcProfile, LowProfile })
                 {
-                    box.Items.Clear();
-                    foreach (var p in s.Profiles)
-                    {
-                        box.Items.Add(Item(p.Name, p.Name));
-                    }
+                    Choices.FillProfiles(box, s.Profiles.Select(p => p.Name)); // "Leave as is", then each profile
                 }
             }
 
             AutoSwitch.IsChecked = s.AutoSwitchProfiles;
-            Select(AcProfile, s.AcProfile);
-            Select(DcProfile, s.BatteryProfile);
-            Select(LowProfile, s.LowBatteryProfile);
+            Choices.Select(AcProfile, s.AcProfile ?? "");
+            Choices.Select(DcProfile, s.BatteryProfile ?? "");
+            Choices.Select(LowProfile, s.LowBatteryProfile ?? "");
             Select(LowThreshold, s.LowBatteryThreshold);
 
             foreach (RadioButton b in KbTimeoutPanel.Children)
             {
                 b.IsChecked = (KeyboardTimeout)b.Tag == s.KeyboardTimeout;
             }
+
+            _kbColors?.Show(s.KeyboardColor);
+            _kbDelay.Show(s.KeyboardAutoOffSeconds);
+            ScreenKeysToggle.IsChecked = s.ScreenHotkeys;
 
             Hotkeys.IsChecked = s.HandleHotkeys;
             Osd.IsChecked = s.ShowOsd;
@@ -379,7 +444,10 @@ public partial class SettingsWindow : Window
             AutoUpdateToggle.IsChecked = s.AutoUpdate;
             WidgetToggle.IsChecked = App.Current.IsWidgetVisible;
             BatteryLogToggle.IsChecked = s.BatteryLogging;
-            CalibrationFast.IsChecked = s.Calibration?.FastDischarge ?? false;
+            if (s.Calibration is { } running)
+            {
+                CalibrationFast.IsChecked = running.FastDischarge; // before a start, it's the user's choice for it
+            }
 
             Simple.Load();
             CalibrationHistory.Text = s.CalibrationHistory.Count == 0
@@ -629,6 +697,16 @@ public partial class SettingsWindow : Window
             var caps = state.Caps;
             KbTimeoutPanel.IsEnabled = caps?.HasKeyboardTimeout != false;
 
+            // The colour, and a delay of the user's choosing, only where the keys are lit over USB (auto-off is Wattkin's own there).
+            var usbLight = caps?.HasKeyboardColor == true;
+            KbColorSection.Visibility = KbDelayHost.Visibility = usbLight ? Visibility.Visible : Visibility.Collapsed;
+            KbColorPanel.IsEnabled = state.CanWrite;
+            KbDelayHost.IsEnabled = state.CanWrite && App.Current.Store.Current.KeyboardTimeout != KeyboardTimeout.AlwaysOn;
+            KbTimeoutHint.Text = usbLight
+                ? "These keys are lit by a USB controller (Mystic Light), which can't be read back or turn itself off: Wattkin keeps the level and colour, sets them again at startup and after sleep, and turns the light off itself when the laptop's own keyboard hasn't been used for the time you choose."
+                : "Auto-off is built into the keyboard controller: the light goes off after about 10 seconds without typing and comes back on with a key press. The controller turns auto-off back on every boot, so Wattkin re-applies your choice at startup and after sleep.";
+            RebuildShiftChoices(caps?.HasSportMode == true);
+
             // Calibration owns charging until it finishes or is cancelled.
             var chargeEditable = state.CanWrite && !App.Current.Hardware.IsCalibrating;
             ApplyLimit.IsEnabled = StopSlider.IsEnabled = CustomResume.IsEnabled = chargeEditable;
@@ -798,7 +876,7 @@ public partial class SettingsWindow : Window
 
     private async void OnDrain(object sender, RoutedEventArgs e) => await App.Current.Hardware.SetDrainToLimitAsync(Drain.IsChecked == true);
 
-    private void OnCalibrationStart(object sender, RoutedEventArgs e)
+    private async void OnCalibrationStart(object sender, RoutedEventArgs e)
     {
         var fast = CalibrationFast.IsChecked == true;
         if (MessageBox.Show(this,
@@ -808,7 +886,7 @@ public partial class SettingsWindow : Window
             return;
         }
 
-        var error = App.Current.Hardware.StartCalibration(fast);
+        var error = await Task.Run(() => App.Current.Hardware.StartCalibration(fast)); // waits for the hardware lock
         if (error is not null)
         {
             MessageBox.Show(this, error, "Battery calibration", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -817,16 +895,24 @@ public partial class SettingsWindow : Window
         RefreshCalibration();
     }
 
-    private void OnCalibrationCancel(object sender, RoutedEventArgs e)
+    private async void OnCalibrationCancel(object sender, RoutedEventArgs e)
     {
         if (MessageBox.Show(this, "Stop the calibration? Your normal charge limit takes over again.", "Battery calibration", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
         {
-            App.Current.Hardware.CancelCalibration();
+            await Task.Run(App.Current.Hardware.CancelCalibration);
             RefreshCalibration();
         }
     }
 
-    private void OnCalibrationFast(object sender, RoutedEventArgs e) => App.Current.Hardware.SetCalibrationFast(CalibrationFast.IsChecked == true);
+    private void OnCalibrationFast(object sender, RoutedEventArgs e)
+    {
+        // Only a running calibration changes now; otherwise the box is read when one starts.
+        if (App.Current.Store.Current.Calibration is not null)
+        {
+            var fast = CalibrationFast.IsChecked == true;
+            _ = Task.Run(() => App.Current.Hardware.SetCalibrationFast(fast)); // waits for the hardware lock
+        }
+    }
 
     private void OnOpenBatteryLog(object sender, RoutedEventArgs e) => OpenFolder(App.Current.BatteryLog.Directory);
 
@@ -836,11 +922,16 @@ public partial class SettingsWindow : Window
 
     private void OnProfileSelected(object sender, SelectionChangedEventArgs e)
     {
-        _editing = App.Current.Store.Current.FindProfile(ProfileList.SelectedItem as string);
-        if (_editing is null)
+        var selected = App.Current.Store.Current.FindProfile(ProfileList.SelectedItem as string);
+        if (selected is null)
         {
+            // Nothing selected (Ctrl+click on the selected one, or the list being refilled): the form
+            // still shows the profile, so Save still saves it, while it exists.
+            _editing = _editing is null ? null : App.Current.Store.Current.FindProfile(_editing.Name);
             return;
         }
+
+        _editing = selected;
 
         _selectingProfile = true;
         try
@@ -852,6 +943,8 @@ public partial class SettingsWindow : Window
             Select(PWindows, _editing.WindowsMode);
             Select(PCpuBoost, _editing.CpuBoost);
             Select(PMaxCpu, _editing.MaxCpuPercent);
+            Select(PMaxFreq, _editing.MaxFrequencyMHz);
+            Select(PEpp, _editing.EnergyPreference);
             Select(PRefresh, _editing.RefreshRate);
             Select(PKeyboard, _editing.KeyboardLevel);
         }
@@ -920,8 +1013,11 @@ public partial class SettingsWindow : Window
         PFan.Items.Add(Item("Unchanged", "unchanged"));
 
         // A renamed fan profile is a new choice: take it from the profile being edited, which followed the rename.
+        // An unsaved choice in the editor stays, if it's still offered (a renamed fan profile is a new
+        // choice: then the profile's own, which followed the rename).
+        var stillOffered = selected is not null && PFan.Items.Cast<ComboBoxItem>().Any(i => Equals(i.Tag, selected));
         _selectingProfile = true;
-        Select(PFan, _editing is { } editing ? FanChoice(editing) : selected ?? "auto");
+        Select(PFan, stillOffered ? selected : _editing is { } editing ? FanChoice(editing) : "auto");
         _selectingProfile = false;
     }
 
@@ -963,16 +1059,24 @@ public partial class SettingsWindow : Window
     // ---- Fan profiles tab ---------------------------------------------------------------------------
 
     private FanCurves? _firmwareCurves;
+    private FanTable? _firmwareTable;
     private FanProfile? _editingFan; // null while the built-in "Laptop default" is shown
 
     /// <summary>The laptop's fan table gives the editor its real temperature steps; read once per window.</summary>
     private async Task LoadFanProfilesAsync()
     {
         _firmwareCurves = await Task.Run(App.Current.Hardware.ReadFanCurves);
+        _firmwareTable = await Task.Run(App.Current.Hardware.ReadFullFanTable);
         RefreshFanProfileList();
     }
 
     private FanSpeeds Factory() => App.Current.Store.Current.FactoryFanCurve?.Clone() ?? FanSpeeds.From(_firmwareCurves!);
+
+    /// <summary>Where Wattkin writes whole tables (temperatures too): the laptop's own table, else null (speeds only).</summary>
+    private FanTable? FactoryTable() => _firmwareTable is null ? null : (App.Current.Store.Current.FactoryFanTable ?? _firmwareTable).Clone();
+
+    /// <summary>A fan profile as a whole table, on a laptop that takes them.</summary>
+    private static FanTable TableOf(FanProfile fan, FanTable factory) => fan.Table?.Clone() ?? factory.WithSpeeds(fan.Speeds);
 
     private void RefreshFanProfileList(string? select = null)
     {
@@ -1006,31 +1110,60 @@ public partial class SettingsWindow : Window
 
         FanEditorPanel.Visibility = Visibility.Visible;
         FanNewButton.IsEnabled = FanDuplicateButton.IsEnabled = true;
+        var table = FactoryTable();
         FanIntro.Text = builtIn
             ? "The curve your laptop came with. It can't be changed here: duplicate it to make your own."
-            : "Each fan's speed at each of the laptop's temperature steps. Choose this fan profile for a profile in Profiles › Fans.";
+            : table is not null
+                ? "Each fan's speed at each step, and the temperatures that start and end each step. Choose this fan profile for a profile in Profiles › Fans."
+                : "Each fan's speed at each of the laptop's temperature steps. Choose this fan profile for a profile in Profiles › Fans.";
         FanName.Text = name;
-        FanEditor.Show(firmware, builtIn ? Factory() : _editingFan!.Speeds);
-        FanEditor.IsEnabled = !builtIn;
+
+        // Whole tables (temperatures too) where the laptop takes them; speeds at the laptop's own steps elsewhere.
+        FanEditor.Visibility = table is null ? Visibility.Visible : Visibility.Collapsed;
+        FanTableEditor.Visibility = table is null ? Visibility.Collapsed : Visibility.Visible;
+        if (table is not null)
+        {
+            FanTableEditor.Show(builtIn ? table : TableOf(_editingFan!, table));
+            FanTableEditor.IsEnabled = !builtIn;
+        }
+        else
+        {
+            FanEditor.Show(firmware, builtIn ? Factory() : _editingFan!.Speeds);
+            FanEditor.IsEnabled = !builtIn;
+        }
+
         UpdateFanProblem();
     }
 
     /// <summary>Problems are shown as you drag.</summary>
     private void UpdateFanProblem()
     {
-        var problem = _editingFan is null ? null : FanEditor.Problem(App.Current.Store.Current.UnrestrictedFanCurves);
+        var unrestricted = App.Current.Store.Current.UnrestrictedFanCurves;
+        var problem = _editingFan is null ? null : FactoryTable() is null ? FanEditor.Problem(unrestricted) : FanTableEditor.Problem(unrestricted);
         FanProblem.Text = problem ?? "";
         FanProblem.Visibility = problem is null ? Visibility.Collapsed : Visibility.Visible;
     }
 
-    private void OnFanProfileNew(object sender, RoutedEventArgs e) => AddFanProfile(UniqueFanName("My fan profile"), Factory());
-
-    private void OnFanProfileDuplicate(object sender, RoutedEventArgs e) =>
-        AddFanProfile(UniqueFanName((FanProfileList.SelectedItem as string ?? "Fan profile") + " copy"), _editingFan?.Speeds.Clone() ?? Factory());
-
-    private void AddFanProfile(string name, FanSpeeds speeds)
+    private void OnFanProfileNew(object sender, RoutedEventArgs e)
     {
-        var fan = new FanProfile { Name = name, Speeds = speeds };
+        if (_firmwareCurves is not null) // the laptop's table read (it gives a new profile its starting speeds)
+        {
+            AddFanProfile(UniqueFanName("My fan profile"), Factory(), FactoryTable());
+        }
+    }
+
+    private void OnFanProfileDuplicate(object sender, RoutedEventArgs e)
+    {
+        if (_firmwareCurves is not null)
+        {
+            AddFanProfile(UniqueFanName((FanProfileList.SelectedItem as string ?? "Fan profile") + " copy"), _editingFan?.Speeds.Clone() ?? Factory(),
+                FactoryTable() is { } factory ? (_editingFan is { } source ? TableOf(source, factory) : factory) : null);
+        }
+    }
+
+    private void AddFanProfile(string name, FanSpeeds speeds, FanTable? table)
+    {
+        var fan = new FanProfile { Name = name, Speeds = table?.ToSpeeds() ?? speeds, Table = table };
         App.Current.Store.Update(s => s.FanProfiles = [.. s.FanProfiles, fan]);
         RefreshFanProfileList(select: name);
     }
@@ -1065,9 +1198,11 @@ public partial class SettingsWindow : Window
 
         var settings = App.Current.Store.Current;
         var name = FanName.Text.Trim();
+        var wholeTable = FactoryTable() is not null;
         var problem = name.Length == 0 ? "Give the fan profile a name."
             : FanProfile.IsBuiltIn(name) ? $"\"{name}\" is built in: choose another name."
             : !string.Equals(name, fan.Name, StringComparison.OrdinalIgnoreCase) && settings.FindFanProfile(name) is not null ? "A fan profile with that name already exists."
+            : wholeTable ? FanTableEditor.Problem(settings.UnrestrictedFanCurves)
             : FanEditor.Problem(settings.UnrestrictedFanCurves);
         if (problem is not null)
         {
@@ -1075,7 +1210,9 @@ public partial class SettingsWindow : Window
             return;
         }
 
-        var saved = new FanProfile { Name = name, Speeds = FanEditor.Value };
+        var saved = wholeTable
+            ? new FanProfile { Name = name, Table = FanTableEditor.Value, Speeds = FanTableEditor.Value.ToSpeeds() }
+            : new FanProfile { Name = name, Speeds = FanEditor.Value };
         var inUse = UsedByActiveProfile(fan.Name);
         App.Current.Store.Update(s =>
         {
@@ -1085,6 +1222,10 @@ public partial class SettingsWindow : Window
                 s.RenameFanProfile(fan.Name, name);
             }
         });
+
+        // The list keeps the same name selected without raising SelectionChanged: point the editor at the
+        // saved object, or the next Save or Delete would look for the replaced one and miss.
+        _editingFan = saved;
         RefreshFanProfileList(select: name);
 
         // In use right now: the laptop gets the new curve straight away.
@@ -1148,11 +1289,13 @@ public partial class SettingsWindow : Window
         App.Current.Store.Update(s =>
         {
             editing.Name = newName;
-            editing.Performance = TagOf<ShiftMode>(PShift);
+            editing.Performance = (PShift.SelectedItem as ComboBoxItem)?.Tag as ShiftMode?; // null: leave the firmware's mode alone
             ApplyFanChoice(editing, fanChoice);
             editing.WindowsMode = TagOf<WindowsPowerMode>(PWindows);
             editing.CpuBoost = (PCpuBoost.SelectedItem as ComboBoxItem)?.Tag as bool?;
             editing.MaxCpuPercent = (PMaxCpu.SelectedItem as ComboBoxItem)?.Tag as int?;
+            editing.MaxFrequencyMHz = (PMaxFreq.SelectedItem as ComboBoxItem)?.Tag as int?;
+            editing.EnergyPreference = (PEpp.SelectedItem as ComboBoxItem)?.Tag as int?;
             editing.RefreshRate = (PRefresh.SelectedItem as ComboBoxItem)?.Tag as int?;
             editing.KeyboardLevel = (PKeyboard.SelectedItem as ComboBoxItem)?.Tag as int?;
 
@@ -1200,7 +1343,7 @@ public partial class SettingsWindow : Window
         ProfileList.SelectedItem = profile.Name;
     }
 
-    private void OnProfileDelete(object sender, RoutedEventArgs e)
+    private async void OnProfileDelete(object sender, RoutedEventArgs e)
     {
         var settings = App.Current.Store.Current;
         if (_editing is null || settings.Profiles.Count <= 1)
@@ -1209,12 +1352,18 @@ public partial class SettingsWindow : Window
         }
 
         var name = _editing.Name;
+        var wasActive = string.Equals(settings.ActiveProfile, name, StringComparison.OrdinalIgnoreCase);
         App.Current.Store.Update(s =>
         {
             s.Profiles = [.. s.Profiles.Where(p => p.Name != name)];
-            Rename(s, name, s.Profiles[0].Name);
+            s.Normalize(); // rules that named it leave the profile as it is; the active one becomes the first
         });
         LoadSettings(full: true);
+        if (wasActive)
+        {
+            // The laptop is still set up the deleted profile's way: put the new active one in place.
+            await App.Current.Hardware.ApplyProfileAsync(App.Current.Store.Current.ActiveProfile);
+        }
     }
 
     private static string UniqueName(string baseName)
@@ -1239,9 +1388,9 @@ public partial class SettingsWindow : Window
         App.Current.Store.Update(s =>
         {
             s.AutoSwitchProfiles = AutoSwitch.IsChecked == true;
-            s.AcProfile = TagOf<string>(AcProfile) ?? s.AcProfile;
-            s.BatteryProfile = TagOf<string>(DcProfile) ?? s.BatteryProfile;
-            s.LowBatteryProfile = TagOf<string>(LowProfile) ?? s.LowBatteryProfile;
+            s.AcProfile = Choices.ProfileOf(AcProfile); // null: leave the profile as it is
+            s.BatteryProfile = Choices.ProfileOf(DcProfile);
+            s.LowBatteryProfile = Choices.ProfileOf(LowProfile);
             s.LowBatteryThreshold = TagOf<int>(LowThreshold);
         });
     }
@@ -1254,7 +1403,7 @@ public partial class SettingsWindow : Window
         }
 
         App.Current.Store.Update(WindowsPower.RestoreOriginals);
-        MessageBox.Show(this, "Processor turbo and max-state settings are back to what they were before Wattkin changed them.", "Wattkin");
+        MessageBox.Show(this, "Processor turbo, max state, max frequency and performance-or-efficiency settings are back to what they were before Wattkin changed them.", "Wattkin");
     }
 
     // ---- keyboard & devices -------------------------------------------------------------------
@@ -1275,6 +1424,82 @@ public partial class SettingsWindow : Window
     }
 
     private async void OnWebcam(object sender, RoutedEventArgs e) => await App.Current.Hardware.SetWebcamAsync(WebcamToggle.IsChecked == true);
+
+    // ---- screen ---------------------------------------------------------------------------------
+
+    private bool _screenUpdating;
+    private DateTime _screenMovedUtc;
+    private System.Windows.Threading.DispatcherTimer? _screenSettled;
+
+    private System.Windows.Threading.DispatcherTimer NewSettleTimer()
+    {
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = ScreenBrightness.UserMoveSettles + TimeSpan.FromMilliseconds(100) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            if (IsLoaded)
+            {
+                RefreshScreen();
+            }
+        };
+        Closed += (_, _) => timer.Stop();
+        return timer;
+    }
+
+    /// <summary>
+    /// The brightness slider, the keys switch and any problem. The slider isn't moved while it's being
+    /// dragged or just after it was moved (arrow keys): it would jump back to a value about to be replaced.
+    /// </summary>
+    private void RefreshScreen()
+    {
+        var screen = App.Current.Screen;
+        _screenUpdating = true;
+        try
+        {
+            ScreenSlider.Maximum = screen.MaxPosition;
+            if (!ScreenSlider.IsMouseCaptureWithin && DateTime.UtcNow - _screenMovedUtc > ScreenBrightness.UserMoveSettles)
+            {
+                ScreenSlider.Value = screen.Position;
+                ScreenValue.Text = ScreenBrightness.SliderText(screen.Position, screen.HasBacklight);
+            }
+
+            ScreenSlider.IsEnabled = ScreenKeysToggle.IsEnabled = App.Current.Hardware.ControlsHardware;
+            ScreenProblem.Text = screen.Problem ?? "";
+            ScreenProblem.Visibility = screen.Problem is null ? Visibility.Collapsed : Visibility.Visible;
+        }
+        finally
+        {
+            _screenUpdating = false;
+        }
+    }
+
+    private void OnScreenSlider(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_screenUpdating || !IsLoaded)
+        {
+            return;
+        }
+
+        var position = (int)Math.Round(e.NewValue);
+        _screenMovedUtc = DateTime.UtcNow;
+        _screenSettled ??= NewSettleTimer();
+        _screenSettled.Stop();
+        _screenSettled.Start(); // then shows where the screen really is (a dim f.lux refused, say)
+        ScreenValue.Text = ScreenBrightness.SliderText(position, App.Current.Screen.HasBacklight);
+        App.Current.Screen.RequestPosition(position);
+    }
+
+    private void OnScreenKeys(object sender, RoutedEventArgs e)
+    {
+        if (_loading)
+        {
+            return;
+        }
+
+        var on = ScreenKeysToggle.IsChecked == true;
+        App.Current.Store.Update(s => s.ScreenHotkeys = on);
+        App.Current.Screen.SetHotkeys(on);
+    }
 
     // ---- graphics -----------------------------------------------------------------------------
 

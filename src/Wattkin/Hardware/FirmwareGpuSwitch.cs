@@ -166,7 +166,8 @@ public static class FirmwareGpuSwitch
 
     /// <summary>Full shutdown (not restart), like MSI Center. Apps get the normal chance to save.</summary>
     public static void ShutDownToApply() =>
-        Process.Start(new ProcessStartInfo("shutdown.exe", "/s /t 0") { CreateNoWindow = true, UseShellExecute = false });
+        // By full path: elevated, a bare name also searches the current folder.
+        Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "shutdown.exe"), "/s /t 0") { CreateNoWindow = true, UseShellExecute = false, WorkingDirectory = Environment.SystemDirectory });
 
     private static byte[]? ReadVariable(out uint attributes, out string? error)
     {

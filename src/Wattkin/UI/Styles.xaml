@@ -87,6 +87,35 @@
         </Setter>
     </Style>
 
+    <!-- Colour swatch: a round RadioButton filled with its Background; a ring marks the chosen one. -->
+    <Style x:Key="Lc.Swatch" TargetType="RadioButton">
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Width" Value="24" />
+        <Setter Property="Height" Value="24" />
+        <Setter Property="Margin" Value="0,0,2,0" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Grid Background="Transparent">
+                        <Ellipse x:Name="Ring" Stroke="Transparent" StrokeThickness="2" />
+                        <Ellipse Margin="4" Fill="{TemplateBinding Background}" Stroke="{DynamicResource Lc.CardBorder}" StrokeThickness="1" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Ring" Property="Stroke" Value="{DynamicResource Lc.SubText}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Ring" Property="Stroke" Value="{DynamicResource Lc.Accent}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- Simple settings: Windows 11-style groups of rows (title and one line of text left, one control right). -->
     <Style x:Key="Lc.GroupTitle" TargetType="TextBlock">
         <Setter Property="Foreground" Value="{DynamicResource Lc.Text}" />

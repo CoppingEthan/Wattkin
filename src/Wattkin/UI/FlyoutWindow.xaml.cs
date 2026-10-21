@@ -5,15 +5,20 @@ using Wattkin.Features;
 using Wattkin.Hardware;
 using Wattkin.Monitoring;
 using Wattkin.Platform;
+using Wattkin.Settings;
 
 namespace Wattkin.UI;
 
 public partial class FlyoutWindow : Window
 {
     private static readonly int[] LimitChoices = [60, 70, 80, 90, 100];
+    private readonly AutoOffDelayStepper _autoOffDelay = new();
+    private ColorSwatches? _keyboardColors;
     private bool _updating;
     private string _profilesKey = "";
     private DateTime _hiddenAtUtc;
+    private DateTime _screenMovedUtc;
+    private readonly System.Windows.Threading.DispatcherTimer _screenSettled = new() { Interval = ScreenBrightness.UserMoveSettles + TimeSpan.FromMilliseconds(100) };
 
     private Rect _anchorArea;
 
@@ -21,7 +26,13 @@ public partial class FlyoutWindow : Window
     {
         InitializeComponent();
         SourceInitialized += (_, _) => WindowEffects.Apply(new WindowInteropHelper(this).Handle, toolWindow: true);
-        Deactivated += (_, _) => HideFlyout();
+        Deactivated += (_, _) =>
+        {
+            if (!ColorSwatches.PickerOpen)
+            {
+                HideFlyout();
+            }
+        };
 
         // Alt+F4 hides instead of destroying the one flyout the app reuses.
         Closing += (_, e) =>
@@ -49,6 +60,21 @@ public partial class FlyoutWindow : Window
         SizeChanged += (_, _) => Anchor();
         App.Current.Hardware.StateChanged += () => Dispatcher.BeginInvoke(RefreshIfVisible);
         App.Current.Store.Changed += () => Dispatcher.BeginInvoke(RefreshIfVisible);
+        App.Current.Screen.Changed += () => Dispatcher.BeginInvoke(() =>
+        {
+            if (IsVisible)
+            {
+                RefreshScreen();
+            }
+        });
+        _screenSettled.Tick += (_, _) =>
+        {
+            _screenSettled.Stop();
+            if (IsVisible)
+            {
+                RefreshScreen();
+            }
+        };
         BuildStaticSegments();
     }
 
@@ -69,19 +95,25 @@ public partial class FlyoutWindow : Window
         }
 
         RefreshControls();
-        Opacity = 0;
-        Show();
-        if (App.Current.Monitor.Latest is { } latest)
-        {
-            Update(latest);
-        }
 
-        _anchorArea = TrayWorkArea();
-        MaxHeight = Math.Max(300, _anchorArea.Height - 24);
-        UpdateLayout();
-        Anchor();
-        Opacity = 1;
+        // Hidden by the compositor until it's in place: the first opening after a start used to flash a
+        // half-drawn flyout in the top-left corner. (The old Opacity = 0 did nothing: WPF ignores it on a
+        // window without AllowsTransparency.)
+        WindowEffects.ShowWhenPlaced(this, () =>
+        {
+            Show();
+            if (App.Current.Monitor.Latest is { } latest)
+            {
+                Update(latest);
+            }
+
+            _anchorArea = TrayWorkArea();
+            MaxHeight = Math.Max(300, _anchorArea.Height - 24);
+            UpdateLayout();
+            Anchor();
+        });
         Activate();
+        _ = App.Current.Screen.RefreshAsync(); // in case a brightness change was missed
     }
 
     public void HideFlyout()
@@ -294,6 +326,22 @@ public partial class FlyoutWindow : Window
             KeyboardPanel.Children.Add(button);
         }
 
+        _keyboardColors = new ColorSwatches(KeyboardColorPanel, "flyoutKbColor");
+        foreach (var (text, timeout) in new[] { ("Never", KeyboardTimeout.AlwaysOn), ("Always", KeyboardTimeout.AutoOff), ("On battery", KeyboardTimeout.AutoOffOnBattery) })
+        {
+            var button = Segment(text, "kbTimeout", timeout);
+            button.Checked += async (_, _) =>
+            {
+                if (!_updating)
+                {
+                    await App.Current.Hardware.SetKeyboardTimeoutAsync(timeout);
+                }
+            };
+            KeyboardTimeoutPanel.Children.Add(button);
+        }
+
+        AutoOffDelayHost.Child = _autoOffDelay.Control;
+
         foreach (var (text, mode) in new[] { ("Integrated only", FirmwareGpuMode.Integrated), ("Hybrid (RTX)", FirmwareGpuMode.Hybrid) })
         {
             var button = Segment(text, "gpu", mode);
@@ -312,14 +360,28 @@ public partial class FlyoutWindow : Window
     private async Task RequestGpuMode(FirmwareGpuMode mode)
     {
         GraphicsPanel.IsEnabled = false;
-        var error = await App.Current.Hardware.RequestGpuModeAsync(mode);
-        GraphicsPanel.IsEnabled = true;
-        if (error is not null)
+        string? error;
+        try
         {
-            GraphicsHint.Text = error;
+            error = await App.Current.Hardware.RequestGpuModeAsync(mode);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("GPU mode switch failed", ex);
+            error = "The graphics switch didn't go through. Try again, or use Settings.";
+        }
+        finally
+        {
+            GraphicsPanel.IsEnabled = true; // the flyout is reused: never left greyed out
         }
 
         RefreshControls();
+        if (error is not null)
+        {
+            // After the refresh, which sets the hint from the switch's state (and would clear this).
+            GraphicsHint.Text = error;
+            GraphicsHint.Visibility = Visibility.Visible;
+        }
     }
 
     private void OnRestartForGpu(object sender, RoutedEventArgs e)
@@ -395,6 +457,22 @@ public partial class FlyoutWindow : Window
                 button.IsEnabled = state.CanWrite;
             }
 
+            // Colour and the delay only where the light is over USB (auto-off is Wattkin's own there).
+            var usbLight = state.Caps?.HasKeyboardColor == true;
+            KeyboardColorPanel.Visibility = AutoOffDelayHost.Visibility = usbLight ? Visibility.Visible : Visibility.Collapsed;
+            KeyboardColorPanel.IsEnabled = state.CanWrite;
+            _keyboardColors?.Show(settings.KeyboardColor);
+            KeyboardTimeoutSection.Visibility = state.Caps?.HasKeyboardTimeout == true ? Visibility.Visible : Visibility.Collapsed;
+            foreach (RadioButton button in KeyboardTimeoutPanel.Children)
+            {
+                button.IsChecked = known && (KeyboardTimeout)button.Tag == settings.KeyboardTimeout;
+                button.IsEnabled = state.CanWrite;
+            }
+
+            _autoOffDelay.Show(settings.KeyboardAutoOffSeconds);
+            AutoOffDelayHost.IsEnabled = state.CanWrite && settings.KeyboardTimeout != KeyboardTimeout.AlwaysOn;
+
+            RefreshScreen();
             RefreshGraphics(state);
 
             ShowBanner(state);
@@ -404,6 +482,46 @@ public partial class FlyoutWindow : Window
         {
             _updating = false;
         }
+    }
+
+    /// <summary>The screen slider: the backlight, and left of 0% the extra dim. Not moved while it's being dragged.</summary>
+    private void RefreshScreen()
+    {
+        var screen = App.Current.Screen;
+        var updating = _updating;
+        _updating = true;
+        try
+        {
+            ScreenSlider.Maximum = screen.MaxPosition;
+            if (!ScreenSlider.IsMouseCaptureWithin && DateTime.UtcNow - _screenMovedUtc > ScreenBrightness.UserMoveSettles)
+            {
+                ScreenSlider.Value = screen.Position;
+                ScreenValue.Text = ScreenBrightness.SliderText(screen.Position, screen.HasBacklight);
+            }
+
+            ScreenSlider.IsEnabled = App.Current.Hardware.ControlsHardware;
+            ScreenHint.Text = screen.Problem ?? "";
+            ScreenHint.Visibility = screen.Problem is null ? Visibility.Collapsed : Visibility.Visible;
+        }
+        finally
+        {
+            _updating = updating;
+        }
+    }
+
+    private void OnScreenSlider(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_updating || !IsLoaded)
+        {
+            return;
+        }
+
+        var position = (int)Math.Round(e.NewValue);
+        _screenMovedUtc = DateTime.UtcNow;
+        _screenSettled.Stop();
+        _screenSettled.Start(); // then shows where the screen really is (a dim f.lux refused, say)
+        ScreenValue.Text = ScreenBrightness.SliderText(position, App.Current.Screen.HasBacklight);
+        App.Current.Screen.RequestPosition(position);
     }
 
     private void RefreshGraphics(HardwareState state)

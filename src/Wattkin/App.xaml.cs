@@ -18,6 +18,7 @@ public partial class App : Application
     private SingleInstance? _single;
     private bool _previewOnly;
     private bool _exiting;
+    private bool _restarting;
     private double? _lastSavedRest;
 
     public static new App Current => (App)Application.Current;
@@ -25,6 +26,7 @@ public partial class App : Application
     public SettingsStore Store { get; private set; } = null!;
     public SystemMonitor Monitor { get; private set; } = null!;
     public HardwareService Hardware { get; private set; } = null!;
+    public ScreenBrightness Screen { get; private set; } = null!;
     public BatteryLog BatteryLog { get; } = new();
     public WattHistory History { get; } = new(TimeSpan.FromMinutes(10));
 
@@ -44,10 +46,23 @@ public partial class App : Application
         HookExceptionLogging();
         ProcessHardening.Apply();
 
-        // One-shot command-line actions (used by the installer and for diagnostics).
-        if (RunCommand(e.Args) is { } exitCode)
+        // One-shot command-line actions (used by the installer and for diagnostics). An error ends the
+        // process with a code: handled by the dispatcher instead, it would leave a windowless copy running
+        // (App.xaml: ShutdownMode OnExplicitShutdown), and the next run would think Wattkin is running.
+        int? exitCode;
+        try
         {
-            Shutdown(exitCode);
+            exitCode = RunCommand(e.Args);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Command '{string.Join(' ', e.Args)}' failed", ex);
+            exitCode = 1;
+        }
+
+        if (exitCode is { } code)
+        {
+            Shutdown(code);
             return;
         }
 
@@ -93,6 +108,8 @@ public partial class App : Application
         Hardware = new HardwareService(Store, Monitor, controlsHardware: owner);
         Hardware.Osd += message => Dispatcher.BeginInvoke(() => ShowOsd(message));
         Hardware.OpenRequested += () => Dispatcher.BeginInvoke(ToggleFlyout);
+        Screen = new ScreenBrightness(Store, controls: owner && !_previewOnly);
+        Screen.Osd += message => Dispatcher.BeginInvoke(() => ShowOsd(message));
         Monitor.Updated += OnSnapshot;
         _lastSavedRest = Store.Current.LearnedRestOfSystemWatts;
 
@@ -113,6 +130,7 @@ public partial class App : Application
         TaskbarMessages.AllowFromExplorer();
         _tray = new TrayIcon();
         Monitor.Start();
+        Screen.Start();
         Task.Run(() =>
         {
             try
@@ -155,6 +173,14 @@ public partial class App : Application
         {
             Diagnostics.Run(Arg(args, "--diagnose"));
             return 0;
+        }
+
+        if (args.Contains("--selftest"))
+        {
+            // --selftest read|write|power [report file]: the hardware self-test (tools\selftest.ps1 runs it).
+            var at = Array.IndexOf(args, "--selftest");
+            string? Next(int offset) => at + offset < args.Length && !args[at + offset].StartsWith("--", StringComparison.Ordinal) ? args[at + offset] : null;
+            return SelfTest.Run(Next(1) ?? "read", Next(2));
         }
 
         if (args.Contains("--exit"))
@@ -278,6 +304,7 @@ public partial class App : Application
             return false;
         }
 
+        _restarting = true; // the new copy puts a dimmed screen back at once: don't flash it bright in between
         Dispatcher.BeginInvoke(ExitApp);
         return true;
     }
@@ -299,6 +326,7 @@ public partial class App : Application
         {
             Log.Error("Unhandled exception (process ending)", ex.ExceptionObject as Exception);
             Hardware?.OnShutdown(); // last chance to stop a drain
+            Screen?.RestoreAfterCrash(); // and not leave the screen dimmed with nothing to brighten it
         };
         TaskScheduler.UnobservedTaskException += (_, ex) =>
         {
@@ -329,6 +357,7 @@ public partial class App : Application
                 break;
             case PowerModes.Resume:
                 Hardware.OnResume();
+                Screen.OnResume();
                 break;
         }
 
@@ -338,6 +367,7 @@ public partial class App : Application
     /// <summary>Sign-out or shutdown: WPF ends without ExitApp, so release hardware and save here.</summary>
     private void OnSessionEnding()
     {
+        Screen.OnSessionEnding(); // the next start begins at normal brightness
         Hardware.OnShutdown();
         BatteryLog.Flush();
         SaveLearned(force: true);
@@ -511,6 +541,8 @@ public partial class App : Application
             {
                 _widget = new WidgetWindow();
                 _widget.Closed += (_, _) => _widget = null; // also when closed with Alt+F4
+                var widget = _widget;
+                UI.WindowEffects.ShowWhenPlaced(widget, widget.Show); // revealed once Loaded has placed it
             }
 
             _widget.Show();
@@ -547,6 +579,7 @@ public partial class App : Application
     {
         if (Elevation.RestartElevated())
         {
+            _restarting = true;
             ExitApp();
         }
     }
@@ -557,6 +590,7 @@ public partial class App : Application
         try
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!, "--elevated --startup") { UseShellExecute = false });
+            _restarting = true;
             ExitApp();
         }
         catch (System.ComponentModel.Win32Exception ex)
@@ -595,6 +629,7 @@ public partial class App : Application
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         });
         Step("updates", () => _updater?.Dispose());
+        Step("screen", () => Screen.Dispose(restoreScreen: !_restarting));
         Step("hardware", Hardware.Dispose);
         Step("monitor", Monitor.Dispose);
         Step("tray", () => _tray?.Dispose());

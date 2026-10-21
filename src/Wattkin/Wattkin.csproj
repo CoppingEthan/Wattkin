@@ -12,9 +12,11 @@
     <ApplicationIcon>Assets\Wattkin.ico</ApplicationIcon>
     <AssemblyName>Wattkin</AssemblyName>
     <RootNamespace>Wattkin</RootNamespace>
-    <Version>1.1.1</Version>
+    <Version>1.2.0</Version>
     <Product>Wattkin</Product>
     <Description>Lightweight control center for MSI laptops</Description>
+    <!-- Updates come from CoppingEthan/Wattkin's signed releases. A fork that publishes its own builds sets this to false, so they aren't replaced. -->
+    <WattkinUpdates Condition="'$(WattkinUpdates)' == ''">true</WattkinUpdates>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <TieredPGO>true</TieredPGO>
     <!-- WPF reads PerMonitorV2 from the manifest; the WinForms analyzer only covers the NotifyIcon. -->
@@ -46,6 +48,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Wattkin.Tests" />
+    <AssemblyMetadata Include="WattkinUpdates" Value="$(WattkinUpdates)" />
   </ItemGroup>
 
 </Project>

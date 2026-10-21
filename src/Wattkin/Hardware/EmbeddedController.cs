@@ -2,14 +2,19 @@ using Wattkin.Monitoring;
 
 namespace Wattkin.Hardware;
 
-/// <summary>EC performance mode (MSI "shift mode"). Mapped to each model's register values.</summary>
+/// <summary>
+/// EC performance mode (MSI "shift mode"): the firmware's CPU power limits. Mapped to each model's
+/// register values; from the lowest limits to the highest: Eco, Balanced, Sport, Turbo.
+/// </summary>
 public enum ShiftMode
 {
-    /// <summary>MSI "Super Battery".</summary>
+    /// <summary>MSI "Super Battery" (0xC2 on the standard layout).</summary>
     Eco,
-    /// <summary>MSI "Balanced" / "Silent" (msi-ec "comfort").</summary>
+    /// <summary>MSI "Balanced" / "Silent" (msi-ec "comfort"; 0xC1).</summary>
     Balanced,
-    /// <summary>MSI "Extreme Performance".</summary>
+    /// <summary>MSI's "Sport" (msi-ec "sport", YAMDCC "Balanced"; 0xC0), between Balanced and Turbo. Not every laptop has it.</summary>
+    Sport,
+    /// <summary>MSI "Extreme Performance" (0xC4).</summary>
     Turbo,
 }
 
@@ -20,8 +25,9 @@ public enum FanMode
     Silent,
     /// <summary>
     /// The controller's own fan table (<see cref="FanCurve"/>), MSI Center's "advanced" mode. Wattkin
-    /// switches to it only when the table is sane, and never changes the table (it hands the same
-    /// bytes back, as MSI Center does before switching).
+    /// switches to it only with a table that passes the safety rules: a fan profile's speeds at the
+    /// firmware's temperature steps, or, where the map names the table's registers, a whole
+    /// <see cref="FanTable"/> with its own temperatures.
     /// </summary>
     Custom,
 }
@@ -50,6 +56,8 @@ public enum EcSupport
 ///
 /// The verified map (EC 1594EMS1.*, Prestige 16 Studio) was cross-checked three ways: MSI Center's call
 /// log on the laptop, MSI's decompiled code, and msi-ec CONF_G2_1 (tested on 1594EMS1.113, PR #797).
+/// The Stealth 15M A11UEK's (EC 1563EMS1.115) comes from YAMDCC's configuration and passed the hardware
+/// self-test (<see cref="SelfTest"/>) on that laptop: every control, whole fan tables and their hysteresis.
 /// </summary>
 public sealed class EmbeddedController : IEcSensorSource
 {
@@ -61,16 +69,29 @@ public sealed class EmbeddedController : IEcSensorSource
     private const byte RegHostFlags = 0xD9;        // bit0 = vendor software present, bit1 = Fn lock
     private const byte RegCapabilities = 0x2F;     // bit1 = webcam switch supported, bit6 = GPU switch supported
 
-    private static readonly string[] VerifiedFirmwarePrefixes = ["1594EMS1."];
+    // The Prestige 16 Studio's family, and the Stealth 15M A11UEK's exact firmware (its self-test passed
+    // every check, 2026-10-21; the rest of its msi-ec family keeps msi-ec's map).
+    private static readonly string[] VerifiedFirmwarePrefixes = ["1594EMS1.", "1563EMS1.115"];
 
     private readonly MsiAcpi _acpi;
     private readonly EcModel? _model;
     private readonly bool _shiftOk;
     private readonly bool _fanOk;
+    private readonly bool _sportSeen;
 
-    public EmbeddedController(MsiAcpi acpi)
+    // One fan-mode or table write at a time, from any thread: a whole table takes up to ~150 firmware
+    // calls, and a second write starting part-way through would take the half-written table as the one
+    // to roll back to.
+    private readonly object _fanWrite = new();
+
+    /// <param name="sportSeen">
+    /// This laptop has been seen in MSI's Sport mode (0xC0) by itself, so its firmware has one: Wattkin
+    /// then offers it on MSI's own layout, where the map doesn't name it.
+    /// </param>
+    public EmbeddedController(MsiAcpi acpi, bool sportSeen = false)
     {
         _acpi = acpi;
+        _sportSeen = sportSeen;
         var listed = EcModels.Find(acpi.EcVersion);
         var verified = VerifiedFirmwarePrefixes.Any(p => acpi.EcVersion.StartsWith(p, StringComparison.OrdinalIgnoreCase));
         var candidate = listed ?? (acpi.WmiMajor == 2 ? EcModels.MsiStandardWmi2 : null);
@@ -118,6 +139,7 @@ public sealed class EmbeddedController : IEcSensorSource
         if (model.ShiftAddress is { } shift)
         {
             var value = _acpi.ReadEc(shift);
+            ShiftAtStart = value;
             shiftOk = value is { } v && ShiftRegisterLooksRight(model, v);
             if (!shiftOk)
             {
@@ -146,18 +168,27 @@ public sealed class EmbeddedController : IEcSensorSource
     /// <summary>
     /// One of the map's performance modes, or 0x80 (none chosen yet). On MSI's own layout also 0xC0, MSI's
     /// "Sport" mode: in MSI Center's code it sits between Comfort (0xC1) and Turbo (0xC4), and the
-    /// Katana GF66 12UG (EC 1583EMS1.111) reports it.
+    /// Katana GF66 12UG (EC 1583EMS1.111) reports it. Not on a family where 0xC0 may be turbo instead
+    /// (<see cref="EcModel.MsiSportUnclear"/>): a laptop found there stays read-only, as before.
     /// </summary>
     public static bool ShiftRegisterLooksRight(EcModel model, byte value) =>
         value == model.ShiftEco || value == model.ShiftBalanced || value == model.ShiftSport || value == model.ShiftTurbo || value == 0x80
-        || (UsesMsiLayout(model) && value == MsiSport);
+        || (UsesMsiLayout(model) && !model.MsiSportUnclear && value == MsiSport);
 
-    private const byte MsiSport = 0xC0;
+    public const byte MsiSport = 0xC0;
+
+    /// <summary>The performance-mode register as the laptop held it when Wattkin started (0xC0: it uses MSI's Sport).</summary>
+    public byte? ShiftAtStart { get; private set; }
 
     private static string Hex(byte? value) => value is { } v ? $"0x{v:X2}" : "unreadable";
 
-    /// <summary>MSI's standard WMI v2 layout (fan 0xD4, keyboard 0xD3): write with MSI Center's exact bit semantics.</summary>
-    private static bool UsesMsiLayout(EcModel? model) => model is { FanModeAddress: 0xD4, KeyboardStateAddress: 0xD3 };
+    /// <summary>
+    /// MSI's standard WMI v2 layout (performance mode 0xD2, fan mode 0xD4, the keyboard at 0xD3 where it
+    /// has one): write with MSI Center's exact bit semantics, and use its fan-table calls. Until 1.1.1 this
+    /// also required the keyboard register, which left msi-ec's families without one (CONF_G2_2, G2_5 and
+    /// G2_10: Stealth, Raider, Vector, Titan) without fan curves, though their fan register is the same.
+    /// </summary>
+    internal static bool UsesMsiLayout(EcModel? model) => model is { ShiftAddress: 0xD2, FanModeAddress: 0xD4 };
 
     public string FirmwareVersion => _acpi.EcVersion;
     public string FirmwareFull => _acpi.EcFirmware;
@@ -206,9 +237,22 @@ public sealed class EmbeddedController : IEcSensorSource
     {
         ShiftMode.Eco => _model?.ShiftEco,
         ShiftMode.Balanced => _model?.ShiftBalanced,
+        ShiftMode.Sport => SportValue,
         ShiftMode.Turbo => _model?.ShiftTurbo ?? _model?.ShiftSport,
         _ => null,
     };
+
+    /// <summary>
+    /// Sport's register value: the map's, else MSI's 0xC0 on its own layout once this laptop has been seen
+    /// using it (MSI Center and the firmware put the Katana GF66 12UG in it; the Prestige 16 Studio never
+    /// was). Null where sport stands in for a missing turbo: that's <see cref="ShiftMode.Turbo"/> then.
+    /// </summary>
+    private byte? SportValue =>
+        _model?.ShiftTurbo is null ? null
+        : _model.ShiftSport ?? (UsesMsiLayout(_model) && !_model.MsiSportUnclear && (_sportSeen || ShiftAtStart == MsiSport) ? MsiSport : null);
+
+    /// <summary>The firmware has a Sport mode of its own, between Balanced and Turbo.</summary>
+    public bool HasSportMode => _shiftOk && SportValue is not null;
 
     public ShiftMode? GetShiftMode()
     {
@@ -217,14 +261,17 @@ public sealed class EmbeddedController : IEcSensorSource
             return null;
         }
 
-        // MSI's Sport (0xC0) has no Wattkin mode of its own; it counts as Balanced, so adopting the laptop's
-        // state picks the Balanced profile rather than Extreme.
         return value == _model.ShiftEco ? ShiftMode.Eco
             : value == _model.ShiftBalanced ? ShiftMode.Balanced
-            : value == _model.ShiftTurbo || value == _model.ShiftSport ? ShiftMode.Turbo
-            : UsesMsiLayout(_model) && value == MsiSport ? ShiftMode.Balanced
+            : value == _model.ShiftTurbo ? ShiftMode.Turbo
+            : value == _model.ShiftSport && _model.ShiftTurbo is null ? ShiftMode.Turbo // a map whose only fast mode is sport
+            : value == _model.ShiftSport ? ShiftMode.Sport
+            : UsesMsiLayout(_model) && value == MsiSport ? (_model.MsiSportUnclear ? ShiftMode.Turbo : ShiftMode.Sport) // msi-ec: "turbo is sometimes 0xc0" there
             : null;
     }
+
+    /// <summary>The performance-mode register holds 0x80: no mode chosen yet (MSI's software never set one). <see cref="GetShiftMode"/> reads null then too.</summary>
+    public bool ShiftModeUnset => _model?.ShiftAddress is { } address && _acpi.ReadEc(address) == 0x80;
 
     /// <summary>Only values from the model's map ever reach the EC; nothing is written when it already holds the value.</summary>
     public bool SetShiftMode(ShiftMode mode) =>
@@ -250,7 +297,16 @@ public sealed class EmbeddedController : IEcSensorSource
 
     /// <param name="curve">For <see cref="FanMode.Custom"/>: the speeds to use; null hands the controller back the table it holds.</param>
     /// <param name="unrestricted">The user accepted the experimental mode: curves that let the laptop run hot are allowed.</param>
-    public bool SetFanMode(FanMode mode, FanSpeeds? curve = null, bool unrestricted = false)
+    /// <param name="table">For <see cref="FanMode.Custom"/> where <see cref="HasFullFanTable"/>: the whole table, temperatures included; it takes the place of <paramref name="curve"/>.</param>
+    public bool SetFanMode(FanMode mode, FanSpeeds? curve = null, bool unrestricted = false, FanTable? table = null)
+    {
+        lock (_fanWrite)
+        {
+            return SetFanModeLocked(mode, curve, unrestricted, table);
+        }
+    }
+
+    private bool SetFanModeLocked(FanMode mode, FanSpeeds? curve, bool unrestricted, FanTable? table)
     {
         if (!_fanOk || _model?.FanModeAddress is not { } address)
         {
@@ -259,7 +315,8 @@ public sealed class EmbeddedController : IEcSensorSource
 
         if (mode == FanMode.Custom)
         {
-            return WriteFanTable(curve, unrestricted) && Write(() => _acpi.WriteEcBits(address, 0x90, 0x80, force: true));
+            var written = table is not null && HasFullFanTable ? WriteFullFanTable(table, unrestricted) : WriteFanTable(curve, unrestricted);
+            return written && Write(() => _acpi.WriteEcBits(address, 0x90, 0x80, force: true));
         }
 
         if (UsesMsiLayout(_model))
@@ -282,8 +339,17 @@ public sealed class EmbeddedController : IEcSensorSource
     /// Only on MSI's own layout, only firmware temperature steps that look right, and (unless
     /// <paramref name="unrestricted"/>) only a resulting table that can cool the laptop. The table is
     /// read back and must match; if it doesn't, the original is written back and the fans go to Auto.
+    /// A laptop with one fan (<see cref="FanCurves.HasGpuFan"/> false) only gets the CPU fan's table.
     /// </summary>
     public bool WriteFanTable(FanSpeeds? curve, bool unrestricted = false)
+    {
+        lock (_fanWrite)
+        {
+            return WriteFanTableLocked(curve, unrestricted);
+        }
+    }
+
+    private bool WriteFanTableLocked(FanSpeeds? curve, bool unrestricted)
     {
         var cpu = _acpi.Get("Get_Fan", 1);
         var gpu = _acpi.Get("Get_Fan", 2);
@@ -300,6 +366,7 @@ public sealed class EmbeddedController : IEcSensorSource
             return false;
         }
 
+        var gpuFan = before.HasGpuFan;
         var wantCpu = cpu[..8];
         var wantGpu = gpu[..8];
         if (curve is not null)
@@ -307,39 +374,147 @@ public sealed class EmbeddedController : IEcSensorSource
             for (var i = 0; i < FanSpeeds.Steps; i++)
             {
                 wantCpu[1 + i] = (byte)curve.Cpu[i];
-                wantGpu[1 + i] = (byte)curve.Gpu[i];
+                if (gpuFan)
+                {
+                    wantGpu[1 + i] = (byte)curve.Gpu[i];
+                }
             }
         }
 
         var after = new FanCurves(before.Cpu with { Speeds = [.. wantCpu[1..8].Select(b => (int)b)] }, before.Gpu with { Speeds = [.. wantGpu[1..8].Select(b => (int)b)] });
-        var stepsOk = new[] { after.Cpu, after.Gpu }.All(c => c.Temps.All(t => t is >= 20 and <= 110) && c.Temps.Zip(c.Temps.Skip(1)).All(p => p.Second > p.First));
+        FanCurve[] fans = gpuFan ? [after.Cpu, after.Gpu] : [after.Cpu];
+        var stepsOk = fans.All(c => c.Temps.All(t => t is >= 20 and <= 110) && c.Temps.Zip(c.Temps.Skip(1)).All(p => p.Second > p.First));
         if (!stepsOk || (!unrestricted && !after.Sane))
         {
             Log.Warn("Not using the fan curve: the controller's temperature steps or the resulting table don't look safe.");
             return false;
         }
 
-        if (!Write(() => _acpi.Set("Set_Fan", 1, wantCpu) && _acpi.Set("Set_Fan", 2, wantGpu)))
+        // A write that fails halfway (the CPU fan's taken, the GPU fan's not) is undone like one that
+        // reads back wrong: in curve mode the controller would otherwise run half the new table.
+        var written = Write(() => _acpi.Set("Set_Fan", 1, wantCpu) && (!gpuFan || _acpi.Set("Set_Fan", 2, wantGpu)));
+        if (!written
+            || _acpi.Get("Get_Fan", 1) is not { } cpuAfter || !cpuAfter.AsSpan(1, 7).SequenceEqual(wantCpu.AsSpan(1, 7))
+            || (gpuFan && (_acpi.Get("Get_Fan", 2) is not { } gpuAfter || !gpuAfter.AsSpan(1, 7).SequenceEqual(wantGpu.AsSpan(1, 7)))))
         {
-            Log.Warn("The controller didn't accept the fan table.");
-            return false;
-        }
-
-        if (_acpi.Get("Get_Fan", 1) is not { } cpuAfter || _acpi.Get("Get_Fan", 2) is not { } gpuAfter
-            || !cpuAfter.AsSpan(1, 7).SequenceEqual(wantCpu.AsSpan(1, 7)) || !gpuAfter.AsSpan(1, 7).SequenceEqual(wantGpu.AsSpan(1, 7)))
-        {
-            Log.Error("The fan table read back differently; putting the previous one back and switching the fans to Auto.");
-            Write(() => _acpi.Set("Set_Fan", 1, cpu.AsSpan(0, 8)) && _acpi.Set("Set_Fan", 2, gpu.AsSpan(0, 8)));
+            Log.Error(written
+                ? "The fan table read back differently; putting the previous one back and switching the fans to Auto."
+                : "The controller didn't take the whole fan table; putting the previous one back and switching the fans to Auto.");
+            Write(() => _acpi.Set("Set_Fan", 1, cpu.AsSpan(0, 8)) && (!gpuFan || _acpi.Set("Set_Fan", 2, gpu.AsSpan(0, 8))));
             Write(() => _acpi.WriteEcBits(address, 0x90, 0x00, force: true));
             return false;
         }
 
-        Log.Info($"Fan table handed to the controller: CPU {BitConverter.ToString(wantCpu, 1, 7)}, GPU {BitConverter.ToString(wantGpu, 1, 7)}{(unrestricted ? " (experimental: unrestricted)" : "")}.");
+        Log.Info($"Fan table handed to the controller: CPU {BitConverter.ToString(wantCpu, 1, 7)}, GPU {(gpuFan ? BitConverter.ToString(wantGpu, 1, 7) : "none (one fan)")}{(unrestricted ? " (experimental: unrestricted)" : "")}.");
         return true;
     }
 
     /// <summary>The fan-curve mode, on MSI's standard layout (where the table's format is known).</summary>
     public bool HasFanCurves => CanWrite && _fanOk && UsesMsiLayout(_model);
+
+    /// <summary>
+    /// Whole fan tables, step temperatures and drop-back temperatures included, written register by
+    /// register: only on a map that names the table's registers (<see cref="EcModel.FanTable"/>).
+    /// </summary>
+    public bool HasFullFanTable => HasFanCurves && _model?.FanTable is not null;
+
+    /// <summary>Where the fan table lives, on a map that names it (the self-test saves and restores these registers).</summary>
+    public FanTableMap? FanTableMap => _model?.FanTable;
+
+    /// <summary>Both fans' whole tables from the controller's registers, or null. Reads only.</summary>
+    public FanTable? ReadFullFanTable()
+    {
+        if (_model?.FanTable is not { } map)
+        {
+            return null;
+        }
+
+        var cpu = map.Cpu.Decode(_acpi.ReadEc);
+        var gpu = map.Gpu.Decode(_acpi.ReadEc);
+        return cpu is not null && gpu is not null ? new FanTable { Cpu = cpu, Gpu = gpu } : null;
+    }
+
+    /// <summary>
+    /// Writes both fans' whole tables, register by register as YAMDCC does, only the bytes that differ;
+    /// selecting the curve mode (0xD4 bit 7) is the caller's step. Refused when the table breaks the
+    /// rules (<see cref="FanTable.Problem"/>, safety rules unless <paramref name="unrestricted"/>) or the
+    /// current one can't be read. The table is read back and must match; if it doesn't, the previous one
+    /// is written back and the fans go to Auto.
+    /// </summary>
+    /// <param name="inCurveMode">
+    /// Write while the controller keeps following the table (the self-test's hysteresis checks need its
+    /// current step kept). Otherwise the fans go to Auto for the write, and the caller selects the curve.
+    /// </param>
+    public bool WriteFullFanTable(FanTable table, bool unrestricted = false, bool inCurveMode = false)
+    {
+        lock (_fanWrite)
+        {
+            return WriteFullFanTableLocked(table, unrestricted, inCurveMode);
+        }
+    }
+
+    private bool WriteFullFanTableLocked(FanTable table, bool unrestricted, bool inCurveMode)
+    {
+        if (!HasFullFanTable || _model?.FanTable is not { } map || _model.FanModeAddress is not { } address)
+        {
+            return false;
+        }
+
+        if (table.Problem(unrestricted) is { } problem)
+        {
+            Log.Warn($"Not using this fan table: {problem}");
+            return false;
+        }
+
+        if (ReadFullFanTable() is not { } before)
+        {
+            Log.Warn("Not using the fan table: the controller's table couldn't be read.");
+            return false;
+        }
+
+        if (before.SameAs(table))
+        {
+            return true;
+        }
+
+        // Written a register at a time (up to ~70 calls): not while the controller follows the table, or
+        // for that long it would run a mix of the old and new ones, steps briefly out of order. Auto in
+        // between; the caller selects the curve once the whole table is in. If the mode can't be read or
+        // Auto can't be set, nothing is written.
+        if (!inCurveMode && GetFanMode() is not (FanMode.Auto or FanMode.Silent) && !Write(() => _acpi.WriteEcBits(address, 0x90, 0x00, force: true)))
+        {
+            Log.Warn("Not writing the fan table: the fans couldn't be switched to Auto for it.");
+            return false;
+        }
+
+        if (!Write(() => WriteChanged(Encode(map, table))) || ReadFullFanTable() is not { } after || !after.SameAs(table))
+        {
+            Log.Error("The fan table read back differently; putting the previous one back and switching the fans to Auto.");
+            Write(() => WriteChanged(Encode(map, before)));
+            Write(() => _acpi.WriteEcBits(address, 0x90, 0x00, force: true));
+            return false;
+        }
+
+        Log.Info($"Fan table written to the controller{(unrestricted ? " (experimental: unrestricted)" : "")}: CPU {table.Cpu.Describe()}; GPU {table.Gpu.Describe()}.");
+        return true;
+    }
+
+    private static IEnumerable<(byte Address, byte Value)> Encode(FanTableMap map, FanTable table) => map.Cpu.Encode(table.Cpu).Concat(map.Gpu.Encode(table.Gpu));
+
+    /// <summary>Writes each byte the register doesn't already hold. False if any write failed.</summary>
+    private bool WriteChanged(IEnumerable<(byte Address, byte Value)> writes)
+    {
+        var ok = true;
+        foreach (var (address, value) in writes)
+        {
+            if (_acpi.ReadEc(address) != value)
+            {
+                ok &= _acpi.WriteEc(address, value);
+            }
+        }
+
+        return ok;
+    }
 
     /// <summary>Both fans' tables from the firmware, or null. Reads only.</summary>
     public FanCurves? ReadFanCurves()

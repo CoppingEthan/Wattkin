@@ -203,6 +203,90 @@ internal static partial class SetupApi
 
     [LibraryImport("cfgmgr32.dll")]
     public static partial uint CM_Get_DevNode_Status(out uint status, out uint problem, uint devInst, uint flags);
+
+    public const uint CR_SUCCESS = 0;
+    public const uint DEVPROP_TYPE_BOOLEAN = 0x11;
+    public static readonly DEVPROPKEY DEVPKEY_Device_InstanceId = new() { FormatId = new("78c34fc8-104a-4aca-9ea4-524d52996e57"), PropertyId = 256 };
+
+    /// <summary>True for devices Windows counts as part of the computer itself (its "local machine" container).</summary>
+    public static readonly DEVPROPKEY DEVPKEY_Device_InLocalMachineContainer = new() { FormatId = new("8c7ed206-3f8a-4827-b3ab-ae9e1faefc6c"), PropertyId = 4 };
+
+    [LibraryImport("cfgmgr32.dll", EntryPoint = "CM_Get_Device_Interface_PropertyW", StringMarshalling = StringMarshalling.Utf16)]
+    public static unsafe partial uint CM_Get_Device_Interface_Property(string deviceInterface, in DEVPROPKEY key, out uint type, void* buffer, ref uint size, uint flags);
+
+    [LibraryImport("cfgmgr32.dll", EntryPoint = "CM_Locate_DevNodeW", StringMarshalling = StringMarshalling.Utf16)]
+    public static partial uint CM_Locate_DevNode(out uint devInst, string deviceId, uint flags);
+
+    [LibraryImport("cfgmgr32.dll", EntryPoint = "CM_Get_DevNode_PropertyW")]
+    public static unsafe partial uint CM_Get_DevNode_Property(uint devInst, in DEVPROPKEY key, out uint type, void* buffer, ref uint size, uint flags);
+}
+
+internal static partial class Hid
+{
+    public static readonly Guid GUID_DEVINTERFACE_HID = new("4d1e55b2-f16f-11cf-88cb-001111000030");
+    public const int HIDP_STATUS_SUCCESS = 0x00110000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public unsafe struct HIDP_CAPS
+    {
+        public ushort Usage;
+        public ushort UsagePage;
+        public ushort InputReportByteLength;
+        public ushort OutputReportByteLength;
+        public ushort FeatureReportByteLength;
+        public fixed ushort Reserved[17];
+        public ushort NumberLinkCollectionNodes;
+        public ushort NumberInputButtonCaps;
+        public ushort NumberInputValueCaps;
+        public ushort NumberInputDataIndices;
+        public ushort NumberOutputButtonCaps;
+        public ushort NumberOutputValueCaps;
+        public ushort NumberOutputDataIndices;
+        public ushort NumberFeatureButtonCaps;
+        public ushort NumberFeatureValueCaps;
+        public ushort NumberFeatureDataIndices;
+    }
+
+    // The HidD_* functions return a one-byte BOOLEAN (hidsdi.h), not a four-byte BOOL: read as BOOL, the
+    // other three bytes are leftovers and a failure could pass for success.
+    [LibraryImport("hid.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.U1)]
+    public static partial bool HidD_SetFeature(SafeFileHandle device, byte[] buffer, int length);
+
+    [LibraryImport("hid.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.U1)]
+    public static partial bool HidD_GetPreparsedData(SafeFileHandle device, out IntPtr data);
+
+    [LibraryImport("hid.dll")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    public static partial bool HidD_FreePreparsedData(IntPtr data);
+
+    [LibraryImport("hid.dll")]
+    public static partial int HidP_GetCaps(IntPtr data, out HIDP_CAPS caps);
+
+    [LibraryImport("hid.dll")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    public static unsafe partial bool HidD_GetProductString(SafeFileHandle device, char* buffer, int bufferBytes);
+}
+
+internal static partial class Gdi32
+{
+    /// <summary>A device context for one display, by its GDI name (e.g. \\.\DISPLAY1). Free it with DeleteDC.</summary>
+    [LibraryImport("gdi32.dll", EntryPoint = "CreateDCW", StringMarshalling = StringMarshalling.Utf16)]
+    public static partial IntPtr CreateDC(string driver, string? device, string? port, IntPtr devMode);
+
+    [LibraryImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool DeleteDC(IntPtr dc);
+
+    /// <summary>The ramp is 3 × 256 WORDs: red, green, then blue.</summary>
+    [LibraryImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static unsafe partial bool SetDeviceGammaRamp(IntPtr dc, ushort* ramp);
+
+    [LibraryImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static unsafe partial bool GetDeviceGammaRamp(IntPtr dc, ushort* ramp);
 }
 
 internal static partial class PowrProf
@@ -326,8 +410,78 @@ internal static partial class User32
     [LibraryImport("user32.dll")]
     public static partial uint GetDpiForSystem();
 
+    public const int WM_INPUT_DEVICE_CHANGE = 0x00FE;
+    public const int WM_INPUT = 0x00FF;
+    public const uint RIDEV_REMOVE = 0x00000001;
+    public const uint RIDEV_INPUTSINK = 0x00000100;
+    public const uint RIDEV_DEVNOTIFY = 0x00002000;
+    public const uint RID_HEADER = 0x10000005;
+    public const uint RIDI_DEVICENAME = 0x20000007;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RAWINPUTDEVICE
+    {
+        public ushort UsagePage;
+        public ushort Usage;
+        public uint Flags;
+        public IntPtr Target;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RAWINPUTHEADER
+    {
+        public uint Type;
+        public uint Size;
+        public IntPtr Device;
+        public IntPtr WParam;
+    }
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool RegisterRawInputDevices([In] RAWINPUTDEVICE[] devices, uint count, uint size);
+
+    [LibraryImport("user32.dll")]
+    public static partial uint GetRawInputData(IntPtr rawInput, uint command, out RAWINPUTHEADER data, ref uint size, uint headerSize);
+
+    [LibraryImport("user32.dll", EntryPoint = "GetRawInputDeviceInfoW")]
+    public static unsafe partial uint GetRawInputDeviceInfo(IntPtr device, uint command, char* data, ref uint size);
+
+    // Global hotkeys (the screen-brightness keys).
+    public const int WM_HOTKEY = 0x0312;
+    public const uint MOD_ALT = 0x0001;
+    public const uint MOD_NOREPEAT = 0x4000;
+    public const uint VK_PRIOR = 0x21; // Page Up
+    public const uint VK_NEXT = 0x22;  // Page Down
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool RegisterHotKey(IntPtr hwnd, int id, uint modifiers, uint key);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool UnregisterHotKey(IntPtr hwnd, int id);
+
     [LibraryImport("user32.dll")]
     public static partial int GetSystemMetricsForDpi(int index, uint dpi);
+
+    /// <summary>With a display's GDI name and this flag, DeviceId is its monitor's interface path (which monitor it is).</summary>
+    public const uint EDD_GET_DEVICE_INTERFACE_NAME = 0x1;
+
+    /// <summary>DISPLAY_DEVICEW: 840 bytes, cb set to that before the call.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public unsafe struct DisplayDevice
+    {
+        public int Size;
+        public fixed char DeviceName[32];
+        public fixed char DeviceString[128];
+        public uint StateFlags;
+        public fixed char DeviceId[128];
+        public fixed char DeviceKey[128];
+    }
+
+    [LibraryImport("user32.dll", EntryPoint = "EnumDisplayDevicesW", StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool EnumDisplayDevices(string? device, uint index, ref DisplayDevice info, uint flags);
 }
 
 internal static partial class NtDll
@@ -337,4 +491,20 @@ internal static partial class NtDll
 
     [LibraryImport("ntdll.dll")]
     public static partial uint NtQuerySystemInformation(int infoClass, IntPtr buffer, int length, out int returnLength);
+
+    public const int ProcessBasicInformationClass = 0;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ProcessBasicInformation
+    {
+        public IntPtr ExitStatus;
+        public IntPtr PebBaseAddress;
+        public IntPtr AffinityMask;
+        public IntPtr BasePriority;
+        public IntPtr UniqueProcessId;
+        public IntPtr InheritedFromUniqueProcessId;
+    }
+
+    [LibraryImport("ntdll.dll")]
+    public static partial int NtQueryInformationProcess(IntPtr process, int infoClass, ref ProcessBasicInformation info, int length, out int returnLength);
 }

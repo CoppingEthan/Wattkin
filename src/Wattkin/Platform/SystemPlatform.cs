@@ -314,41 +314,63 @@ public static class DisplayModes
     [DllImport("user32.dll")]
     private static extern int DisplayConfigGetDeviceInfo(ref SourceDeviceName request);
 
-    /// <summary>GDI name (e.g. \\.\DISPLAY1) of the built-in panel, or null if it's off / not found.</summary>
+    /// <summary>
+    /// GDI name (e.g. \\.\DISPLAY1) of the built-in panel, or null if it's off / not found. When no
+    /// output says it's built in but the only screen on is one whose kind Windows can't name ("other"),
+    /// that's taken as the laptop's own: a user's Prestige 13 AI Evo A1MG showed no refresh rates at all
+    /// in 1.1.1 (diagnostics report, 2026-10-16; the report now lists the outputs). Never a screen on a
+    /// known external connector, so an external monitor with the lid closed keeps its own refresh rate.
+    /// </summary>
     public static string? InternalDisplay()
+    {
+        var paths = ActivePaths();
+        foreach (var path in paths)
+        {
+            if (IsInternal(path.OutputTechnology) && GdiName(path) is { } name)
+            {
+                return name;
+            }
+        }
+
+        return paths.Count == 1 && paths[0].OutputTechnology == OUTPUT_OTHER ? GdiName(paths[0]) : null;
+    }
+
+    private const uint OUTPUT_OTHER = 0xFFFFFFFF;
+
+    /// <summary>For the diagnostics report: each active output's technology code and GDI name.</summary>
+    public static string DescribeOutputs()
+    {
+        var paths = ActivePaths();
+        return paths.Count == 0
+            ? "none reported"
+            : string.Join(", ", paths.Select(p => $"0x{p.OutputTechnology:X}{(IsInternal(p.OutputTechnology) ? " (built in)" : "")} {GdiName(p) ?? "?"}"));
+    }
+
+    private static bool IsInternal(uint technology) => technology is OUTPUT_INTERNAL or OUTPUT_LVDS or OUTPUT_DISPLAYPORT_EMBEDDED or OUTPUT_UDI_EMBEDDED;
+
+    private static List<PathInfo> ActivePaths()
     {
         try
         {
-            if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, out var pathCount, out var modeCount) != 0)
+            // The configuration can change between the two calls (a monitor plugged in): try again then.
+            for (var attempt = 0; attempt < 3; attempt++)
             {
-                return null;
-            }
-
-            var paths = new PathInfo[pathCount];
-            var modes = new ModeInfo[modeCount];
-            if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ref pathCount, paths, ref modeCount, modes, IntPtr.Zero) != 0)
-            {
-                return null;
-            }
-
-            foreach (var path in paths.AsSpan(0, (int)pathCount))
-            {
-                if (path.OutputTechnology is not (OUTPUT_INTERNAL or OUTPUT_LVDS or OUTPUT_DISPLAYPORT_EMBEDDED or OUTPUT_UDI_EMBEDDED))
+                if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, out var pathCount, out var modeCount) != 0)
                 {
-                    continue;
+                    return [];
                 }
 
-                var request = new SourceDeviceName
+                var paths = new PathInfo[pathCount];
+                var modes = new ModeInfo[modeCount];
+                var status = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, ref pathCount, paths, ref modeCount, modes, IntPtr.Zero);
+                if (status == 0)
                 {
-                    Type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
-                    Size = (uint)Marshal.SizeOf<SourceDeviceName>(),
-                    AdapterId = path.SourceAdapterId,
-                    Id = path.SourceId,
-                    ViewGdiDeviceName = string.Empty,
-                };
-                if (DisplayConfigGetDeviceInfo(ref request) == 0 && !string.IsNullOrEmpty(request.ViewGdiDeviceName))
+                    return [.. paths.AsSpan(0, (int)pathCount)];
+                }
+
+                if (status != ErrorInsufficientBuffer)
                 {
-                    return request.ViewGdiDeviceName;
+                    return [];
                 }
             }
         }
@@ -356,7 +378,22 @@ public static class DisplayModes
         {
         }
 
-        return null;
+        return [];
+    }
+
+    private const int ErrorInsufficientBuffer = 122;
+
+    private static string? GdiName(PathInfo path)
+    {
+        var request = new SourceDeviceName
+        {
+            Type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
+            Size = (uint)Marshal.SizeOf<SourceDeviceName>(),
+            AdapterId = path.SourceAdapterId,
+            Id = path.SourceId,
+            ViewGdiDeviceName = string.Empty,
+        };
+        return DisplayConfigGetDeviceInfo(ref request) == 0 && !string.IsNullOrEmpty(request.ViewGdiDeviceName) ? request.ViewGdiDeviceName : null;
     }
 
     public static int? CurrentRefreshRate()

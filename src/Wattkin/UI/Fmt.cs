@@ -61,6 +61,14 @@ internal static class Fmt
         return t.Minutes == 0 ? $"{(int)t.TotalHours}h" : $"{(int)t.TotalHours}h {t.Minutes:00}m";
     }
 
+    /// <summary>A short wait in seconds: "45 s", "1 min", "1 min 30 s".</summary>
+    public static string Delay(int seconds) => (seconds / 60, seconds % 60) switch
+    {
+        (0, var s) => $"{s} s",
+        (var m, 0) => $"{m} min",
+        (var m, var s) => $"{m} min {s} s",
+    };
+
     public static string Percent(double? value, string format = "0") => value is { } v ? v.ToString(format, C) + "%" : "—";
 
     public static string GHz(double mhz) => mhz <= 0 ? "—" : (mhz / 1000).ToString("0.00", C) + " GHz";
@@ -148,10 +156,12 @@ internal static class Fmt
     /// <summary>Everything a profile sets, one item each: what the flyout shows under the profile buttons.</summary>
     public static string ProfileDetails(Settings.Profile p)
     {
-        var parts = new List<string>
+        var parts = new List<string>();
+        if (p.Performance is { } shift)
         {
-            "CPU " + (p.Performance switch { ShiftMode.Eco => "Eco", ShiftMode.Turbo => "Extreme", _ => "Balanced" }),
-        };
+            parts.Add("CPU " + Shift(shift));
+        }
+
         if (FanWords(p) is { } fans)
         {
             parts.Add(fans);
@@ -177,6 +187,16 @@ internal static class Fmt
             parts.Add($"CPU up to {max}%");
         }
 
+        if (p.MaxFrequencyMHz is { } mhz)
+        {
+            parts.Add(mhz == 0 ? "no clock cap" : $"up to {mhz / 1000.0:0.0#} GHz");
+        }
+
+        if (p.EnergyPreference is { } epp)
+        {
+            parts.Add($"EPP {epp}");
+        }
+
         if (p.RefreshRate is { } hz)
         {
             parts.Add($"{hz} Hz screen");
@@ -187,7 +207,7 @@ internal static class Fmt
             parts.Add("keyboard " + (level switch { 0 => "off", 1 => "low", 2 => "mid", _ => "high" }));
         }
 
-        return string.Join("  ·  ", parts);
+        return parts.Count == 0 ? "leaves everything as it is" : string.Join("  ·  ", parts);
     }
 
     /// <summary>A profile's fan setting in a few words; null when it leaves the fans alone.</summary>
@@ -206,15 +226,18 @@ internal static class Fmt
     /// <summary>What a profile changes, in plain words, built from its settings so it stays true after editing.</summary>
     public static string ProfileSummary(Settings.Profile p)
     {
-        var parts = new List<string>
+        var parts = new List<string>();
+        if (p.Performance is { } shift)
         {
-            p.Performance switch
+            parts.Add(shift switch
             {
                 ShiftMode.Eco => "lowest power",
+                ShiftMode.Sport => "higher power limits",
                 ShiftMode.Turbo => "highest power limits",
                 _ => "normal power",
-            },
-        };
+            });
+        }
+
         if (p.Fan != FanMode.Auto || p.CoolerBoost)
         {
             if (FanWords(p) is { } fans)
@@ -233,6 +256,16 @@ internal static class Fmt
             parts.Add($"CPU capped at {max}%");
         }
 
+        if (p.MaxFrequencyMHz is { } mhz and > 0)
+        {
+            parts.Add($"clock capped at {mhz / 1000.0:0.0#} GHz");
+        }
+
+        if (p.EnergyPreference is { } epp and >= 60)
+        {
+            parts.Add("favours efficiency");
+        }
+
         if (p.RefreshRate is { } hz)
         {
             parts.Add($"{hz} Hz screen");
@@ -243,13 +276,22 @@ internal static class Fmt
             parts.Add($"keyboard light {(level == 0 ? "off" : "on")}");
         }
 
-        return string.Join(", ", parts);
+        if (parts.Count > 0)
+        {
+            return string.Join(", ", parts);
+        }
+
+        // Only the usual values set (auto fans, turbo on…) isn't the same as leaving things alone.
+        var setsNothing = p is { Performance: null, Fan: null, CoolerBoost: false, CpuBoost: null, MaxCpuPercent: null, MaxFrequencyMHz: null, EnergyPreference: null }
+            && p.WindowsMode == Settings.WindowsPowerMode.Unchanged;
+        return setsNothing ? "leaves everything as it is" : "normal settings";
     }
 
     public static string Shift(ShiftMode? mode) => mode switch
     {
         ShiftMode.Eco => "Eco",
         ShiftMode.Balanced => "Balanced",
+        ShiftMode.Sport => "Sport",
         ShiftMode.Turbo => "Extreme",
         _ => "—",
     };

@@ -26,10 +26,44 @@ public sealed record EcModel(
     byte? KeyboardStateAddress, byte KeyboardStateBase, byte KeyboardMaxLevel,  // kbd_bl.bl_state_address, state_base_value, max_state (msi-ec writes base | level, reads level & 0x3)
     byte? KeyboardModeAddress, byte? KeyboardAlwaysOnValue, byte? KeyboardAutoOffValue,  // kbd_bl.bl_mode_address and bl_modes[0], bl_modes[1] (whole-byte values; the register can be shared, e.g. 0x2c with the mic-mute LED)
     byte? CpuTempAddress, byte? GpuTempAddress,          // cpu/gpu rt_temp_address
-    bool VerifiedOnWindows);
+    bool VerifiedOnWindows,
+    FanTableMap? FanTable = null,                        // whole fan tables written register by register (not from msi-ec)
+    bool MsiSportUnclear = false);                       // msi-ec says 0xC0 is sometimes this family's turbo: it isn't taken as MSI's Sport
 
 public static class EcModels
 {
+    /// <summary>
+    /// Maps for exact firmwares that override msi-ec's family map. Not from msi-ec: each one names its
+    /// source. Looked up before <see cref="All"/>.
+    /// </summary>
+    public static readonly EcModel[] Overrides =
+    [
+        // Stealth 15M A11UEK (MS-1563, BIOS E1563IMS.11D). msi-ec lists this firmware under CONF_G2_10,
+        // which has no keyboard backlight register. The registers are those of YAMDCC's config for the
+        // sibling Stealth 15M A11SDK (EC 1562EMS1.117), which YAMDCC 1.2.2 wrote on the contributor's
+        // laptop: MSI's standard WMI v2 layout, keyboard 0xD3 (0x80–0x83), fan mode 0xD4 (0x0D / 0x1D /
+        // 0x8D), Cooler Boost 0x98 bit 7, battery 0xD7, shift mode 0xD2 (C2 / C1 / C0 / C4), and MSI's
+        // classic fan table with drop-back offsets (YAMDCC OffsetDT). Neither source has a keyboard
+        // auto-off register (msi-ec: unsupported), so none here: the keys are lit over USB, and auto-off
+        // is Wattkin's own (HardwareService.KeyboardLight). Verified by the contributor's hardware
+        // self-test on the laptop (WMI 2.8, 2026-10-21): every write read back, Cooler Boost and
+        // run-from-battery worked, and the fan target followed the table, hysteresis included.
+        new EcModel(
+            Source: "Stealth 15M A11UEK (YAMDCC config)",
+            Firmware: ["1563EMS1.115"],
+            ChargeAddress: 0xd7,
+            ShiftAddress: 0xd2, ShiftEco: 0xc2, ShiftBalanced: 0xc1, ShiftSport: 0xc0, ShiftTurbo: 0xc4, // C0 is in YAMDCC's config ("Balanced") and passed the self-test
+            FanModeAddress: 0xd4, FanAuto: 0x0d, FanSilent: 0x1d, FanAdvanced: 0x8d,
+            CoolerBoostAddress: 0x98, CoolerBoostBit: 7,
+            WebcamAddress: 0x2e, WebcamBit: 1,
+            MicMuteLedAddress: 0x2c, MuteLedAddress: 0x2d, LedBit: 1,
+            KeyboardStateAddress: 0xd3, KeyboardStateBase: 0x80, KeyboardMaxLevel: 3,
+            KeyboardModeAddress: null, KeyboardAlwaysOnValue: null, KeyboardAutoOffValue: null,
+            CpuTempAddress: 0x68, GpuTempAddress: 0x80,
+            VerifiedOnWindows: true,
+            FanTable: FanTableMap.MsiClassic),
+    ];
+
     public static readonly EcModel[] All =
     [
         // CONF_G1_0 (Gen 1 / WMI1 - e.g. Prestige 14 A10SC, Prestige 15 A10SC)
@@ -743,7 +777,8 @@ public static class EcModels
             KeyboardStateAddress: null, KeyboardStateBase: 0x80, KeyboardMaxLevel: 3,
             KeyboardModeAddress: null, KeyboardAlwaysOnValue: 0x00, KeyboardAutoOffValue: 0x08,
             CpuTempAddress: 0x68, GpuTempAddress: 0x80,
-            VerifiedOnWindows: false),
+            VerifiedOnWindows: false,
+            MsiSportUnclear: true), // not msi-ec's: see the turbo note above
     ];
 
     /// <summary>
@@ -766,7 +801,10 @@ public static class EcModels
         CpuTempAddress: 0x68, GpuTempAddress: 0x80,
         VerifiedOnWindows: false);
 
-    /// <summary>Exact firmware match (case-insensitive), else null.</summary>
+    /// <summary>Exact firmware match (case-insensitive), an override first, else null.</summary>
     public static EcModel? Find(string firmware) =>
-        Array.Find(All, model => Array.Exists(model.Firmware, fw => string.Equals(fw, firmware, StringComparison.OrdinalIgnoreCase)));
+        Array.Find(Overrides, m => Matches(m, firmware)) ?? Array.Find(All, m => Matches(m, firmware));
+
+    private static bool Matches(EcModel model, string firmware) =>
+        Array.Exists(model.Firmware, fw => string.Equals(fw, firmware, StringComparison.OrdinalIgnoreCase));
 }

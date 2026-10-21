@@ -43,7 +43,10 @@ public sealed record EcCapabilities(
     bool HasKeyboardLight,
     bool HasKeyboardTimeout,
     int KeyboardMaxLevel,
-    bool HasFanCurves);
+    bool HasFanCurves,
+    bool HasFullFanTable = false,
+    bool HasSportMode = false,
+    bool HasKeyboardColor = false);
 
 /// <summary>
 /// Owns the EC connection and everything that writes to hardware.
@@ -56,7 +59,7 @@ public sealed record EcCapabilities(
 /// </summary>
 public sealed partial class HardwareService : IDisposable
 {
-    private static readonly string[] MsiProcesses = ["MSI.CentralServer", "MSI_Central_Service", "MSIAPService", "OmApSvcBroker"];
+    internal static readonly string[] MsiProcesses = ["MSI.CentralServer", "MSI_Central_Service", "MSIAPService", "OmApSvcBroker"];
     private static readonly TimeSpan ActiveReconcile = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan IdleReconcile = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ActiveWindow = TimeSpan.FromSeconds(60);
@@ -145,6 +148,7 @@ public sealed partial class HardwareService : IDisposable
             return;
         }
 
+        InitializeKeyboardLight(); // a USB light, where the keys aren't lit by the EC
         _acpi = MsiAcpi.TryOpen(out var error, readOnly: !_controls);
         if (_acpi is null)
         {
@@ -153,14 +157,27 @@ public sealed partial class HardwareService : IDisposable
             return;
         }
 
-        var ec = new EmbeddedController(_acpi);
+        var ec = new EmbeddedController(_acpi, _store.Current.SportModeSeen);
         Log.Info($"EC firmware {ec.FirmwareVersion}: {ec.Support} register map ({ec.MapSource ?? "none"}), writes {(ec.CanWrite ? "enabled" : "disabled")}.");
 
         if (_controls)
         {
+            // The laptop in MSI's Sport mode by itself: its firmware has one, so profiles may use it.
+            if (ec.CanWrite && ec.ShiftAtStart == EmbeddedController.MsiSport && !_store.Current.SportModeSeen)
+            {
+                _store.Update(s => s.SportModeSeen = true);
+                Log.Info("The laptop was in MSI's Sport mode (0xC0): Sport is offered in profiles from now on.");
+            }
+
             if (!_store.Current.HardwareAdopted)
             {
                 AdoptCurrentHardwareState(ec);
+            }
+
+            // Killed during a forced fan mode: the first profile applied puts Cooler Boost back as it was.
+            if (_store.Current.CoolerBoostBeforeForce is { } boostBefore)
+            {
+                _fansBeforeForce = new FansBeforeForce(null, boostBefore, null, null);
             }
 
             CaptureFactoryFanCurve(ec); // before any profile can write a curve of its own
@@ -191,6 +208,7 @@ public sealed partial class HardwareService : IDisposable
     private void StartControlling()
     {
         ApplyKeyboardSettings(_monitor.Latest?.Power.OnAc ?? true);
+        RestoreKeyboardLight();
 
         if (_store.Current.HandleHotkeys)
         {
@@ -221,7 +239,12 @@ public sealed partial class HardwareService : IDisposable
         var shift = ec.GetShiftMode();
         var fan = ec.GetFanMode();
         var boost = ec.GetCoolerBoost();
-        if (limit is null || autoOff is null || shift is null || fan is null || boost is null)
+
+        // A register the map doesn't have reads as null too: only a failed read of one it has counts
+        // (the Stealth 15M has no keyboard auto-off register; some maps no Cooler Boost). A performance
+        // mode never chosen (0x80, MSI's software never ran) is no failure: that laptop is adopted as
+        // Balanced, or every start would find it unreadable and push the defaults anyway.
+        if (limit is null || (shift is null && !ec.ShiftModeUnset) || fan is null || (autoOff is null && ec.HasKeyboardTimeout) || (boost is null && ec.HasCoolerBoost))
         {
             Log.Warn("Couldn't read the current hardware state; will try again next start. Nothing was changed.");
             return;
@@ -235,25 +258,34 @@ public sealed partial class HardwareService : IDisposable
                 s.ChargeResumeBelow = null;
             }
 
-            s.KeyboardTimeout = autoOff.Value ? KeyboardTimeout.AutoOff : KeyboardTimeout.AlwaysOn;
-            var current = shift switch
+            if (autoOff is { } off)
+            {
+                s.KeyboardTimeout = off ? KeyboardTimeout.AutoOff : KeyboardTimeout.AlwaysOn;
+            }
+
+            var wanted = shift switch
             {
                 ShiftMode.Eco => "Battery saver",
                 ShiftMode.Turbo => "Performance",
                 _ => fan == FanMode.Silent ? "Quiet" : "Balanced",
             };
-            if (s.FindProfile(current) is { } profile)
+
+            // The default profile of that name, else (renamed earlier) the first one.
+            var profile = s.FindProfile(wanted) ?? s.Profiles[0];
+            profile.CoolerBoost = boost ?? false;
+            if (shift == ShiftMode.Sport)
             {
-                profile.CoolerBoost = boost.Value;
-                if (fan == FanMode.Custom)
-                {
-                    profile.Fan = null; // keep MSI's custom fan curve
-                }
+                profile.Performance = ShiftMode.Sport; // as the laptop is now: adopting changes nothing
             }
 
-            s.ActiveProfile = current;
-            s.AcProfile = current;
-            s.BatteryProfile = current;
+            if (fan == FanMode.Custom)
+            {
+                profile.Fan = null; // keep MSI's custom fan curve
+            }
+
+            s.ActiveProfile = profile.Name;
+            s.AcProfile = profile.Name;
+            s.BatteryProfile = profile.Name;
             s.HardwareAdopted = true;
         });
         Log.Info($"Adopted current hardware state: limit {limit}%, keyboard auto-off {autoOff}, mode {shift}/{fan}.");
@@ -269,6 +301,7 @@ public sealed partial class HardwareService : IDisposable
         }
 
         ExpireFanForce();
+        (string Name, ProfileScope Scope, bool Announce)? apply;
         lock (_gate)
         {
             if (_disposed || _suspended)
@@ -277,7 +310,14 @@ public sealed partial class HardwareService : IDisposable
             }
 
             ReconcileCharge(snapshot);
-            AutoSwitchProfiles(snapshot);
+            apply = AutoSwitchProfiles(snapshot);
+        }
+
+        // Applied after the lock: a full profile changes Windows settings and maybe the display mode,
+        // which take seconds, and the UI's own hardware calls mustn't wait for that.
+        if (apply is { } a)
+        {
+            ApplyProfile(a.Name, a.Scope, a.Announce);
         }
     }
 
@@ -374,27 +414,40 @@ public sealed partial class HardwareService : IDisposable
         }
     }
 
-    private void AutoSwitchProfiles(Snapshot snapshot)
+    /// <summary>Under the lock: which profile the power state calls for now, if any (the caller applies it after the lock).</summary>
+    private (string Name, ProfileScope Scope, bool Announce)? AutoSwitchProfiles(Snapshot snapshot)
     {
         var settings = _store.Current;
+        (string Name, ProfileScope Scope, bool Announce)? apply = null;
 
         // The charger counts as connected while (or just after) the EC simulates an unplug: that's the
         // EC's own state, not a settings flag, so a finished drain or calibration can't cause flapping.
         var settling = DateTime.UtcNow - _simulateClearedUtc < SimulateSettle;
         if (snapshot.Power.Source == PowerSource.Unknown && !_simulatingSeen && !settling)
         {
-            return; // no trustworthy reading this sample
+            return null; // no trustworthy reading this sample
         }
 
         var onAc = snapshot.Power.OnAc || _simulatingSeen || settling;
 
+        var percent = snapshot.Power.Percent;
+        var low = !onAc && settings.IsLow(percent);
         if (_lastOnAc is null)
         {
             _lastOnAc = onAc;
+            // Already low at a start: the low-battery rule is dealt with when the start-up pick came from the
+            // rules (the power source changed while Wattkin was off) or the profile was applied while this
+            // low (by the rule, or by hand). Otherwise it still applies, on the next sample.
+            _lowBatteryApplied = low && (settings.ActiveProfileOnAc != onAc || (settings.ActiveProfileOnAc == false && settings.IsLow(settings.ActiveProfilePercent)));
             ApplyKeyboardSettings(onAc);
 
-            ApplyProfile(StartupProfile(settings, onAc), ProfileScope.Hardware, announce: false); // Windows keeps its own settings
-            return;
+            // The profile picked last keeps Windows' own settings (they survive a restart); one the rules
+            // pick now, or the same one on the other power source (Windows' power mode is set per source),
+            // is applied in full: the charger changed while Wattkin was off.
+            var startup = StartupProfile(settings, onAc, percent);
+            var same = string.Equals(startup, settings.ActiveProfile, StringComparison.OrdinalIgnoreCase)
+                && (settings.ActiveProfileOnAc is not { } was || was == onAc);
+            return (startup, same ? ProfileScope.Hardware : ProfileScope.Full, false);
         }
 
         // Debounce: a change must be seen on two samples in a row.
@@ -403,19 +456,19 @@ public sealed partial class HardwareService : IDisposable
             if (_pendingOnAc != onAc)
             {
                 _pendingOnAc = onAc;
-                return;
+                return null;
             }
 
             _pendingOnAc = null;
             _lastOnAc = onAc;
-            _lowBatteryApplied = false;
+            _lowBatteryApplied = low; // unplugged already low: the low-battery rule decides now, not again later
             _activeUntilUtc = DateTime.UtcNow + ActiveWindow;
             _reconcileNow = true;
             Log.Info(onAc ? "Charger connected." : "Charger disconnected.");
             ApplyKeyboardSettings(onAc);
-            if (settings.AutoSwitchProfiles)
+            if (settings.AutoProfile(onAc, percent) is { } rule)
             {
-                ApplyProfile(onAc ? settings.AcProfile : settings.BatteryProfile, ProfileScope.Full, announce: true);
+                apply = (rule, ProfileScope.Full, true);
             }
         }
         else
@@ -423,24 +476,29 @@ public sealed partial class HardwareService : IDisposable
             _pendingOnAc = null;
         }
 
-        if (!onAc && settings.AutoSwitchProfiles && settings.LowBatteryThreshold > 0 && !_lowBatteryApplied
-            && snapshot.Power.Percent is { } percent && percent <= settings.LowBatteryThreshold)
+        // Crossing the threshold on battery: once, until the charger comes back. A manual pick stays until
+        // then. With the low-battery rule on "Leave as is" there's nothing to switch to.
+        if (low && !_lowBatteryApplied)
         {
             _lowBatteryApplied = true;
-            ApplyProfile(settings.LowBatteryProfile, ProfileScope.Full, announce: true);
+            if (settings.LowBatteryProfile is not null && settings.AutoProfile(onAc, percent) is { } rule)
+            {
+                apply = (rule, ProfileScope.Full, true);
+            }
         }
+
+        return apply;
     }
 
     // ---- Profiles ------------------------------------------------------------------------------
 
     /// <summary>
     /// After a restart or an update: the profile picked last, unless the charger was plugged in or out
-    /// in the meantime. Then the charger or battery profile, as when that happens while running.
+    /// in the meantime. Then what the automatic rules pick, as when that happens while running (still the
+    /// last one when the matching rule leaves the profile alone).
     /// </summary>
-    public static string StartupProfile(AppSettings settings, bool onAc) =>
-        settings.AutoSwitchProfiles && settings.ActiveProfileOnAc != onAc
-            ? onAc ? settings.AcProfile : settings.BatteryProfile
-            : settings.ActiveProfile;
+    public static string StartupProfile(AppSettings settings, bool onAc, double? percent = null) =>
+        settings.ActiveProfileOnAc != onAc && settings.AutoProfile(onAc, percent) is { } rule ? rule : settings.ActiveProfile;
 
     private enum ProfileScope
     {
@@ -452,30 +510,56 @@ public sealed partial class HardwareService : IDisposable
 
     public Task ApplyProfileAsync(string name) => Task.Run(() => ApplyProfile(name, ProfileScope.Full, announce: false));
 
-    /// <summary>EC writes happen under the hardware lock; slow Windows changes (dGPU, display) outside it.</summary>
-    private void ApplyProfile(string name, ProfileScope scope, bool announce)
+    /// <summary>
+    /// EC writes happen under the hardware lock; slow Windows changes (dGPU, display) outside it.
+    /// <paramref name="name"/> null: the active profile, looked up under the lock (after sleep, so a
+    /// profile the rules applied meanwhile isn't overwritten by the one from before).
+    /// </summary>
+    private void ApplyProfile(string? name, ProfileScope scope, bool announce)
     {
         if (!_controls)
         {
             return; // changes EC and Windows settings
         }
 
-        var profile = _store.Current.FindProfile(name);
-        if (profile is null)
-        {
-            return;
-        }
-
+        Profile? profile;
+        var appliedOnAc = _lastOnAc ?? _monitor.Latest?.Power.OnAc ?? true; // the charger as the rules see it (a drain counts as plugged in)
         lock (_gate)
         {
+            profile = _store.Current.FindProfile(name ?? _store.Current.ActiveProfile);
+            if (profile is null)
+            {
+                return;
+            }
+
             if (_ec is { } ec && !_disposed)
             {
-                ec.SetShiftMode(profile.Performance);
-                ApplyFans(ec, profile);
-                if (profile.KeyboardLevel is { } level)
+                if (profile.Performance is { } shift)
                 {
-                    ec.SetKeyboardLevel(level);
+                    ec.SetShiftMode(shift);
                 }
+
+                ApplyFans(ec, profile);
+            }
+
+            if (!_disposed && profile.KeyboardLevel is { } level)
+            {
+                WriteKeyboardLevel(level); // the EC's register, or the USB light
+            }
+
+            // Remembered with the power source and battery level it was chosen at, so a restart keeps it
+            // (see AutoSwitchProfiles). Under the lock, so the active profile is never a step behind.
+            var appliedPercent = _monitor.Latest?.Power.Percent;
+            var current = _store.Current;
+            if (current.ActiveProfile != profile.Name || current.ActiveProfileOnAc != appliedOnAc || current.IsLow(current.ActiveProfilePercent) != current.IsLow(appliedPercent))
+            {
+                var picked = profile.Name;
+                _store.Update(s =>
+                {
+                    s.ActiveProfile = picked;
+                    s.ActiveProfileOnAc = appliedOnAc;
+                    s.ActiveProfilePercent = appliedPercent;
+                });
             }
         }
 
@@ -483,7 +567,7 @@ public sealed partial class HardwareService : IDisposable
         {
             try
             {
-                var onAc = _monitor.Latest?.Power.OnAc ?? true;
+                var onAc = appliedOnAc;
                 // Inside Update so the saved originals are never changed while being serialized.
                 _store.Update(s =>
                 {
@@ -497,6 +581,16 @@ public sealed partial class HardwareService : IDisposable
                     {
                         WindowsPower.SetMaxCpuPercent(max, s);
                     }
+
+                    if (profile.EnergyPreference is { } epp)
+                    {
+                        WindowsPower.SetEnergyPreference(epp, s);
+                    }
+
+                    if (profile.MaxFrequencyMHz is { } mhz)
+                    {
+                        WindowsPower.SetMaxFrequency(mhz, s);
+                    }
                 });
 
                 if (profile.RefreshRate is { } hz)
@@ -506,19 +600,8 @@ public sealed partial class HardwareService : IDisposable
             }
             catch (Exception ex) when (ex is ExternalException or InvalidOperationException or UnauthorizedAccessException)
             {
-                Log.Error($"Applying Windows settings for profile {name} failed", ex);
+                Log.Error($"Applying Windows settings for profile {profile.Name} failed", ex);
             }
-        }
-
-        // Remembered with the power source it was chosen on, so a restart keeps it (see AutoSwitchProfiles).
-        var appliedOnAc = _lastOnAc ?? _monitor.Latest?.Power.OnAc ?? true;
-        if (_store.Current.ActiveProfile != profile.Name || _store.Current.ActiveProfileOnAc != appliedOnAc)
-        {
-            _store.Update(s =>
-            {
-                s.ActiveProfile = profile.Name;
-                s.ActiveProfileOnAc = appliedOnAc;
-            });
         }
 
         Log.Info($"Profile applied ({scope}): {profile.Name}");
@@ -649,13 +732,6 @@ public sealed partial class HardwareService : IDisposable
 
     // ---- Keyboard, devices ----------------------------------------------------------------------
 
-    public Task SetKeyboardLevelAsync(int level) => Task.Run(() =>
-    {
-        Writer?.SetKeyboardLevel(level);
-        _store.Update(s => s.KeyboardLevel = level);
-        SafeRefreshState();
-    });
-
     public Task SetKeyboardTimeoutAsync(KeyboardTimeout timeout) => Task.Run(() =>
     {
         _store.Update(s => s.KeyboardTimeout = timeout);
@@ -672,6 +748,7 @@ public sealed partial class HardwareService : IDisposable
             _ => false,
         };
         Writer?.SetKeyboardAutoOff(autoOff);
+        SetSoftwareAutoOff(autoOff); // where the EC's auto-off doesn't reach the keys (USB light)
     }
 
     public Task SetWebcamAsync(bool enabled) => Task.Run(() =>
@@ -749,13 +826,15 @@ public sealed partial class HardwareService : IDisposable
         Task.Run(() =>
         {
             Thread.Sleep(3000);
-            if (Volatile.Read(ref _suspendGeneration) != generation || _disposed)
-            {
-                return; // slept again in the meantime
-            }
-
             lock (_gate)
             {
+                // Checked under the lock: a suspend between the check and clearing the flag would
+                // otherwise leave it clear for the next sleep.
+                if (Volatile.Read(ref _suspendGeneration) != generation || _disposed)
+                {
+                    return; // slept again in the meantime
+                }
+
                 if (!_controls || _ec is not { } ec)
                 {
                     _suspended = false;
@@ -772,7 +851,8 @@ public sealed partial class HardwareService : IDisposable
             }
 
             ApplyKeyboardSettings(_monitor.Latest?.Power.OnAc ?? true);
-            ApplyProfile(_store.Current.ActiveProfile, ProfileScope.Hardware, announce: false);
+            RestoreKeyboardLight();
+            ApplyProfile(null, ProfileScope.Hardware, announce: false); // the active one, as it is by then
             SyncMuteLeds();
             _monitor.Poke();
         });
@@ -790,11 +870,40 @@ public sealed partial class HardwareService : IDisposable
         }
 
         _calibration?.Pause();
+
+        // A USB light auto-off turned off: on again for the sign-in screen and after Wattkin. Not tied to
+        // the controller (the light and its auto-off work where the controller stays read-only).
+        WakeKeyboardLight();
         if (_ec is not { CanWrite: true } ec)
         {
             return;
         }
 
+        // A charge pass already past its suspended/disposed check could still switch run-from-battery
+        // on after it's cleared below: wait (briefly, inside Windows' suspend window) for it to finish.
+        var locked = Monitor.TryEnter(_gate, TimeSpan.FromMilliseconds(750));
+        try
+        {
+            ClearSimulatedUnplug(ec);
+            Volatile.Write(ref _runFromBatteryUntilTicks, 0);
+            ReleaseFanForce(ec); // under the lock when it came free: not alongside an expiring force
+        }
+        finally
+        {
+            if (locked)
+            {
+                Monitor.Exit(_gate);
+            }
+        }
+
+        if (restoreRestingLimit && IsCalibrating)
+        {
+            ec.SetChargeLimit(_store.Current.ChargeLimit);
+        }
+    }
+
+    private static void ClearSimulatedUnplug(EmbeddedController ec)
+    {
         var cleared = false;
         for (var attempt = 0; attempt < 3 && !cleared; attempt++)
         {
@@ -809,13 +918,6 @@ public sealed partial class HardwareService : IDisposable
         if (!cleared)
         {
             Log.Error("Could not confirm that discharge-while-plugged-in was switched off.");
-        }
-
-        Volatile.Write(ref _runFromBatteryUntilTicks, 0);
-        ReleaseFanForce(ec);
-        if (restoreRestingLimit && IsCalibrating)
-        {
-            ec.SetChargeLimit(_store.Current.ChargeLimit);
         }
     }
 
@@ -996,7 +1098,7 @@ public sealed partial class HardwareService : IDisposable
             ec.GetShiftMode(),
             ec.GetFanMode(),
             ec.GetCoolerBoost(),
-            ec.GetKeyboardLevel(),
+            KeyboardLevelNow(ec),
             ec.GetKeyboardAutoOff(),
             ec.GetWebcam(),
             _simulatingSeen,
@@ -1006,7 +1108,8 @@ public sealed partial class HardwareService : IDisposable
             CalibrationView(),
             settings.ActiveProfile,
             _msiRunning,
-            new EcCapabilities(ec.Support, ec.MapSource, ec.CanSimulateUnplug, ec.CanSwitchGpuMode, ec.HasCoolerBoost, ec.HasKeyboardLight, ec.HasKeyboardTimeout, ec.KeyboardMaxLevel, ec.HasFanCurves));
+            new EcCapabilities(ec.Support, ec.MapSource, ec.CanSimulateUnplug, ec.CanSwitchGpuMode, ec.HasCoolerBoost, ec.HasKeyboardLight || HasUsbKeyboardLight, ec.HasKeyboardTimeout || HasUsbKeyboardLight,
+                HasUsbKeyboardLight ? MysticLight.MaxLevel : ec.KeyboardMaxLevel, ec.HasFanCurves, ec.HasFullFanTable, ec.HasSportMode, HasKeyboardColor: HasUsbKeyboardLight));
         StateChanged?.Invoke();
     }
 
@@ -1051,7 +1154,7 @@ public sealed partial class HardwareService : IDisposable
             Log.Error("Releasing hardware failed", ex);
         }
 
-        foreach (var step in new Action[] { () => _stateTimer?.Dispose(), _hotkeys.Dispose, _audio.Dispose, () => _calibration?.Dispose(), () => _acpi?.Dispose() })
+        foreach (var step in new Action[] { () => _stateTimer?.Dispose(), _hotkeys.Dispose, _audio.Dispose, () => _calibration?.Dispose(), () => _acpi?.Dispose(), DisposeKeyboardLight })
         {
             try
             {

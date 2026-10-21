@@ -51,11 +51,17 @@ internal sealed class OsdWindow : Window
         _text.Text = message;
         BeginAnimation(OpacityProperty, null);
         Opacity = 1;
-        Show();
-        UpdateLayout();
-        var area = SystemParameters.WorkArea;
-        Left = area.Left + ((area.Width - ActualWidth) / 2);
-        Top = area.Bottom - ActualHeight - 60;
+
+        // Hidden until it's centred: the first message after a start (e.g. "Wattkin updated to …") used
+        // to flash in the top-left corner, where Windows first puts a window.
+        WindowEffects.ShowWhenPlaced(this, () =>
+        {
+            Show();
+            UpdateLayout();
+            var area = SystemParameters.WorkArea;
+            Left = area.Left + ((area.Width - ActualWidth) / 2);
+            Top = area.Bottom - ActualHeight - 60;
+        });
         _timer.Stop();
         _timer.Start();
     }

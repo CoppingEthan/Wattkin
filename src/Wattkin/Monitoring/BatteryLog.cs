@@ -188,7 +188,9 @@ public sealed class BatteryLog
         {
             folder = System.IO.Directory.CreateTempSubdirectory("wattkin-");
             var file = Path.Combine(folder.FullName, "battery.xml");
-            using (var p = Process.Start(new ProcessStartInfo("powercfg.exe", $"/batteryreport /xml /output \"{file}\"") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true }))
+            // By full path: Wattkin runs elevated, and a bare name also searches the current folder.
+            var powercfg = Path.Combine(Environment.SystemDirectory, "powercfg.exe");
+            using (var p = Process.Start(new ProcessStartInfo(powercfg, $"/batteryreport /xml /output \"{file}\"") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true, WorkingDirectory = Environment.SystemDirectory }))
             {
                 p?.StandardOutput.ReadToEnd();
                 p?.WaitForExit(15000);

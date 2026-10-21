@@ -118,16 +118,45 @@
                         </StackPanel>
                         <UniformGrid x:Name="KeyboardPanel" Grid.Column="1" Rows="1" Width="240" VerticalAlignment="Center" />
                     </Grid>
+                    <!-- Only where the keys are lit by an RGB controller over USB (Mystic Light). -->
+                    <StackPanel x:Name="KeyboardColorRow">
+                        <Border Style="{StaticResource Lc.Divider}" />
+                        <Grid Style="{StaticResource Lc.Row}">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Colour" Style="{StaticResource Lc.RowTitle}" />
+                                <TextBlock Text="Kept by Wattkin: set again at startup and after sleep." Style="{StaticResource Lc.RowText}" />
+                            </StackPanel>
+                            <WrapPanel x:Name="KeyboardColorPanel" Grid.Column="1" Width="240" VerticalAlignment="Center" />
+                        </Grid>
+                    </StackPanel>
                     <Border Style="{StaticResource Lc.Divider}" />
                     <Grid Style="{StaticResource Lc.Row}">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                         <StackPanel VerticalAlignment="Center">
                             <TextBlock Text="Turn off when not typing" Style="{StaticResource Lc.RowTitle}" />
-                            <TextBlock Text="After about 10 seconds; any key brings it back." Style="{StaticResource Lc.RowText}" />
+                            <TextBlock x:Name="AutoOffText" Text="After about 10 seconds; any key brings it back." Style="{StaticResource Lc.RowText}" />
                         </StackPanel>
-                        <CheckBox x:Name="AutoOffToggle" Grid.Column="1" Style="{StaticResource Lc.Toggle}" Click="OnAutoOff" />
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <!-- The delay: only where auto-off is Wattkin's own (USB light). -->
+                            <Border x:Name="AutoOffDelayHost" Margin="0,0,14,0" VerticalAlignment="Center" />
+                            <CheckBox x:Name="AutoOffToggle" Style="{StaticResource Lc.Toggle}" Click="OnAutoOff" />
+                        </StackPanel>
                     </Grid>
                 </StackPanel>
+            </Border>
+
+            <!-- Screen -->
+            <TextBlock Text="Screen" Style="{StaticResource Lc.GroupTitle}" />
+            <Border Style="{StaticResource Lc.Group}">
+                <Grid Style="{StaticResource Lc.Row}">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="Brightness keys" Style="{StaticResource Lc.RowTitle}" />
+                        <TextBlock x:Name="ScreenKeysText" Text="Alt+Page Down dims, Alt+Page Up brightens, down past the lowest setting, like f.lux." Style="{StaticResource Lc.RowText}" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <CheckBox x:Name="ScreenKeysToggle" Grid.Column="1" Style="{StaticResource Lc.Toggle}" Click="OnScreenKeys" />
+                </Grid>
             </Border>
 
             <!-- Wattkin -->

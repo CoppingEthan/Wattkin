@@ -30,9 +30,13 @@ public sealed partial class HardwareService
     private static readonly TimeSpan CompareStep = TimeSpan.FromSeconds(45);
 
     private volatile FanForce _fanForce;
+    private FansBeforeForce? _fansBeforeForce;
     private long _fanForceUntilTicks;
     private int _fanTestBusy;
     private long _runFromBatteryUntilTicks;
+
+    /// <summary>How the fans were when a force began; a custom curve's speeds and table where readable.</summary>
+    private sealed record FansBeforeForce(FanMode? Mode, bool? CoolerBoost, FanSpeeds? Speeds, FanTable? Table);
 
     public FanForce ForcedFans => _fanForce;
     public bool FanTestRunning => Volatile.Read(ref _fanTestBusy) == 1;
@@ -65,6 +69,22 @@ public sealed partial class HardwareService
     {
         lock (_gate)
         {
+            // The fans before the first force, for a profile that leaves them alone ("Unchanged"): ending
+            // the force puts them back as they were (a custom table too: the Curve force overwrites it)
+            // rather than leaving the forced setting.
+            if (_fanForce == FanForce.None && force != FanForce.None && Writer is { } before)
+            {
+                var mode = before.GetFanMode();
+                var custom = mode == FanMode.Custom;
+                _fansBeforeForce = new FansBeforeForce(
+                    mode,
+                    before.GetCoolerBoost(),
+                    custom && before.HasFanCurves && before.ReadFanCurves() is { } curves ? FanSpeeds.From(curves) : null,
+                    custom && before.HasFullFanTable ? before.ReadFullFanTable() : null);
+                var boost = _fansBeforeForce.CoolerBoost ?? false;
+                _store.Update(s => s.CoolerBoostBeforeForce = boost); // in case Wattkin is killed before the force ends
+            }
+
             _fanForce = force;
             Volatile.Write(ref _fanForceUntilTicks, (DateTime.UtcNow + duration).Ticks);
             if (Writer is { } ec && !_disposed)
@@ -91,7 +111,9 @@ public sealed partial class HardwareService
                 break;
             case FanForce.Curve:
                 ec.SetCoolerBoost(false);
-                ec.SetFanMode(FanMode.Custom, _store.Current.FactoryFanCurve);
+                // The laptop's own table is always allowed, even where the safety rules for edited tables are stricter.
+                ec.SetFanMode(FanMode.Custom, _store.Current.FactoryFanCurve, unrestricted: ec.HasFullFanTable && _store.Current.FactoryFanTable?.LooksLikeFactory() == true,
+                    table: ec.HasFullFanTable ? _store.Current.FactoryFanTable : null);
                 break;
             default:
                 if (profile is null)
@@ -99,15 +121,49 @@ public sealed partial class HardwareService
                     return;
                 }
 
-                // The profile's fan profile, else the laptop's factory curve. No usable fan table (or a
-                // curve the safety rules refuse): the quietest built-in curve instead.
+                // The profile's fan profile, else the laptop's factory curve (a whole table, temperatures
+                // included, where the laptop takes one). No usable fan table (or a curve the safety rules
+                // refuse): the quietest built-in curve instead.
                 var (curve, unrestricted) = _store.Current.ResolveFanCurve(profile);
-                if (profile.Fan is { } fan && !ec.SetFanMode(fan, curve, unrestricted) && fan == FanMode.Custom)
+                var table = ec.HasFullFanTable ? _store.Current.ResolveFanTable(profile) : null;
+
+                // The laptop's own whole table (as it came) is always allowed: the safety rules for
+                // edited tables are stricter than some factory tables.
+                if (table is not null && _store.Current.FactoryFanTable is { } factory && factory.LooksLikeFactory() && table.SameAs(factory))
+                {
+                    unrestricted = true;
+                }
+
+                var leftAlone = profile.Fan is null && !profile.CoolerBoost;
+                var afterForce = _fansBeforeForce;
+                _fansBeforeForce = null;
+                if (_store.Current.CoolerBoostBeforeForce is not null)
+                {
+                    _store.Update(s => s.CoolerBoostBeforeForce = null); // the force is over
+                }
+                if (profile.Fan is { } fan && !ec.SetFanMode(fan, curve, unrestricted, table) && fan == FanMode.Custom)
                 {
                     ec.SetFanMode(FanMode.Silent);
                 }
+                else if (profile.Fan is null && afterForce is { Mode: { } before })
+                {
+                    // Leaving the fans alone after a force: back as they were. A custom table is written
+                    // back as it was read (it was in the controller already, so any rules it broke are
+                    // the laptop's or the user's own).
+                    ec.SetFanMode(before, afterForce.Speeds, unrestricted: true, afterForce.Table);
+                }
 
-                ec.SetCoolerBoost(profile.CoolerBoost);
+                // Fans left alone: Cooler Boost too (the Fn key may have turned it on), except that a force
+                // ending puts it back as it was before (off if that's unknown, never left on by the force).
+                if (!leftAlone)
+                {
+                    ec.SetCoolerBoost(profile.CoolerBoost);
+                }
+                else if (afterForce is not null)
+                {
+                    ec.SetCoolerBoost(afterForce.CoolerBoost ?? false);
+                }
+
                 break;
         }
     }
@@ -119,6 +175,28 @@ public sealed partial class HardwareService
     /// </summary>
     private void CaptureFactoryFanCurve(EmbeddedController ec)
     {
+        // The whole table too, where the laptop takes one: the temperatures are the user's to change there.
+        if (_store.Current.FactoryFanTable is null && ec.HasFullFanTable && ec.ReadFullFanTable() is { } held && held.Problem(unrestricted: true) is null)
+        {
+            // Fan profiles (1.1.1's, or this version's after a failed first read) wrote their speeds into
+            // these same registers, leaving the temperatures alone. With the laptop's own speeds already
+            // known from its first start, those go back in, so a profile's curve (even "Off") is never
+            // kept as the laptop's own.
+            var table = _store.Current.FactoryFanCurve is { } own ? held.WithSpeeds(own) : held;
+
+            // The factory table is written with the safety rules off: one that doesn't look like a
+            // laptop's own (another fan tool's quiet table) isn't kept. Tried again at the next start.
+            if (table.LooksLikeFactory())
+            {
+                _store.Update(s => s.FactoryFanTable = table);
+                Log.Info($"Factory fan table saved: CPU {table.Cpu.Describe()}; GPU {table.Gpu.Describe()}.");
+            }
+            else
+            {
+                Log.Warn($"The fan table in the controller doesn't look like the laptop's own, so it wasn't saved as the factory table: CPU {table.Cpu.Describe()}; GPU {table.Gpu.Describe()}.");
+            }
+        }
+
         if (_store.Current.FactoryFanCurve is not null || !ec.HasFanCurves || ec.ReadFanCurves() is not { Sane: true } curves)
         {
             return;
@@ -131,7 +209,7 @@ public sealed partial class HardwareService
             s.FactoryFanCurve = factory;
             rebuilt = s.FitDefaultFanProfiles(curves);
         });
-        Log.Info($"Factory fan curve saved (fan mode now {ec.GetFanMode()}): CPU {string.Join("/", factory.Cpu)}, GPU {string.Join("/", factory.Gpu)}, top {curves.Cpu.Speeds[^1]}/{curves.Gpu.Speeds[^1]}%.");
+        Log.Info($"Factory fan curve saved (fan mode now {ec.GetFanMode()}): CPU {string.Join("/", factory.Cpu)}, GPU {(curves.HasGpuFan ? string.Join("/", factory.Gpu) : "none (one fan)")}, top {curves.Cpu.Speeds[^1]}/{curves.Gpu.Speeds[^1]}%.");
         if (rebuilt.Count > 0)
         {
             Log.Info($"Fan profiles fitted to this laptop's table: {string.Join(", ", rebuilt)}.");
@@ -140,6 +218,9 @@ public sealed partial class HardwareService
 
     /// <summary>The laptop's fan tables now, for the profile editor; null without hardware access.</summary>
     public FanCurves? ReadFanCurves() => _ec?.ReadFanCurves();
+
+    /// <summary>The laptop's whole fan table now, temperatures included; null unless the laptop takes whole tables.</summary>
+    public FanTable? ReadFullFanTable() => _ec is { HasFullFanTable: true } ec ? ec.ReadFullFanTable() : null;
 
     /// <summary>Monitor thread: a forced mode ends by itself.</summary>
     private void ExpireFanForce()
@@ -356,14 +437,29 @@ public sealed partial class HardwareService
             return;
         }
 
-        var level = ec.HasKeyboardLight ? ec.GetKeyboardLevel() : null;
+        // The USB light can't be read back: only flashed when Wattkin knows the level to put back.
+        var usb = HasUsbKeyboardLight;
+        var level = usb ? _store.Current.KeyboardLevel : ec.HasKeyboardLight ? ec.GetKeyboardLevel() : null;
+        var color = KeyboardColorOf(_store.Current);
+        void Keyboard(int value)
+        {
+            if (usb)
+            {
+                ShowKeyboardLight(value, color);
+            }
+            else
+            {
+                ec.SetKeyboardLevel(value);
+            }
+        }
+
         for (var i = 0; i < 3 && !_disposed; i++)
         {
             ec.SetMuteLed(true);
             ec.SetMicMuteLed(true);
             if (level is not null)
             {
-                ec.SetKeyboardLevel(ec.KeyboardMaxLevel);
+                Keyboard(usb ? MysticLight.MaxLevel : ec.KeyboardMaxLevel);
             }
 
             Thread.Sleep(400);
@@ -371,7 +467,7 @@ public sealed partial class HardwareService
             ec.SetMicMuteLed(false);
             if (level is not null)
             {
-                ec.SetKeyboardLevel(0);
+                Keyboard(0);
             }
 
             Thread.Sleep(400);
@@ -379,7 +475,7 @@ public sealed partial class HardwareService
 
         if (level is { } original)
         {
-            ec.SetKeyboardLevel(original);
+            Keyboard(original);
         }
 
         _lastMicLed = _lastSpeakerLed = null;
@@ -409,16 +505,28 @@ public sealed partial class HardwareService
         Row(0x98, $"Cooler Boost: {OnOff(ec.GetCoolerBoost())}");
         Row(0xD7, $"charge limit: {ec.GetChargeLimit()?.ToString(CultureInfo.InvariantCulture) ?? "?"}%");
         Row(0xBF, $"run from battery while plugged in: {OnOff(ec.GetSimulatedUnplug())}");
-        Row(0xD3, $"keyboard backlight: level {ec.GetKeyboardLevel()?.ToString(CultureInfo.InvariantCulture) ?? "?"}");
+        Row(0xD3, $"keyboard backlight: level {ec.GetKeyboardLevel()?.ToString(CultureInfo.InvariantCulture) ?? "?"}{(HasUsbKeyboardLight ? " (not used: the keys are lit over USB)" : "")}");
         Row(0x2C, $"keyboard auto-off: {OnOff(ec.GetKeyboardAutoOff())} (also the mic-mute light)");
         Row(0x2D, "mute light");
         Row(0xD9, $"Fn lock: {OnOff(ec.GetFnLock())}");
-        if (ec.ReadFanCurves() is { } curves)
+        if (KeyboardLightLine() is { } light)
+        {
+            sb.AppendLine(light);
+        }
+
+        if (ec.HasFullFanTable && ec.ReadFullFanTable() is { } table)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"Fan table (used only in curve mode){(table.Problem(unrestricted: true) is { } problem ? $": {problem}" : "")}");
+            sb.AppendLine($"  CPU fan  {table.Cpu.Describe()}");
+            sb.AppendLine($"  GPU fan  {table.Gpu.Describe()}");
+        }
+        else if (ec.ReadFanCurves() is { } curves)
         {
             sb.AppendLine();
             sb.AppendLine($"Fan curve (used only in curve mode){(curves.Sane ? "" : ": doesn't look safe, so Wattkin won't use it")}");
             sb.AppendLine($"  CPU fan  {curves.Cpu.Describe()}");
-            sb.AppendLine($"  GPU fan  {curves.Gpu.Describe()}");
+            sb.AppendLine($"  GPU fan  {(curves.HasGpuFan ? curves.Gpu.Describe() : "none (this laptop has one fan)")}");
         }
 
         return sb.ToString().TrimEnd();

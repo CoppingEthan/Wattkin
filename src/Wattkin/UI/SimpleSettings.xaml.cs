@@ -18,6 +18,8 @@ public partial class SimpleSettings : UserControl
     private bool _loading;
     private string _profileNames = "";
     private CalibrationSuggestion? _suggestion;
+    private readonly ColorSwatches _keyboardColors;
+    private readonly AutoOffDelayStepper _autoOffDelay = new();
 
     public SimpleSettings()
     {
@@ -57,6 +59,9 @@ public partial class SimpleSettings : UserControl
             KeyboardPanel.Children.Add(button);
         }
 
+        _keyboardColors = new ColorSwatches(KeyboardColorPanel, "simpleKbColor");
+        AutoOffDelayHost.Child = _autoOffDelay.Control;
+
         foreach (var (text, mode) in new[] { ("Integrated", FirmwareGpuMode.Integrated), ("Hybrid", FirmwareGpuMode.Hybrid) })
         {
             var button = Segment(text, "simpleGpu", mode);
@@ -65,8 +70,21 @@ public partial class SimpleSettings : UserControl
                 if (!_loading)
                 {
                     GpuPanel.IsEnabled = false;
-                    var error = await App.Current.Hardware.RequestGpuModeAsync(mode);
-                    GpuPanel.IsEnabled = true;
+                    string? error;
+                    try
+                    {
+                        error = await App.Current.Hardware.RequestGpuModeAsync(mode);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error("GPU mode switch failed", ex);
+                        error = "The graphics switch didn't go through. Try again.";
+                    }
+                    finally
+                    {
+                        GpuPanel.IsEnabled = true;
+                    }
+
                     if (error is not null)
                     {
                         MessageBox.Show(Window.GetWindow(this), error, "Graphics", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -107,21 +125,20 @@ public partial class SimpleSettings : UserControl
                 _profileNames = names;
                 foreach (var box in new[] { AcProfile, DcProfile })
                 {
-                    box.Items.Clear();
-                    foreach (var p in s.Profiles)
-                    {
-                        box.Items.Add(new ComboBoxItem { Content = p.Name, Tag = p.Name });
-                    }
+                    Choices.FillProfiles(box, s.Profiles.Select(p => p.Name));
                 }
             }
 
-            Select(AcProfile, s.AcProfile);
-            Select(DcProfile, s.BatteryProfile);
+            Choices.Select(AcProfile, s.AcProfile ?? "");
+            Choices.Select(DcProfile, s.BatteryProfile ?? "");
             AcText.Text = Describe(s.FindProfile(s.AcProfile));
             DcText.Text = Describe(s.FindProfile(s.BatteryProfile))
-                + (s.AutoSwitchProfiles && s.LowBatteryThreshold > 0 ? $" Below {s.LowBatteryThreshold}% it switches to {s.LowBatteryProfile} by itself." : "");
+                + (s.AutoSwitchProfiles && s.LowBatteryThreshold > 0 && s.LowBatteryProfile is { } low ? $" At {s.LowBatteryThreshold}% or less it switches to {low} by itself." : "");
 
             AutoOffToggle.IsChecked = s.KeyboardTimeout != KeyboardTimeout.AlwaysOn;
+            _keyboardColors.Show(s.KeyboardColor);
+            _autoOffDelay.Show(s.KeyboardAutoOffSeconds);
+            ScreenKeysToggle.IsChecked = s.ScreenHotkeys;
             TrayToggle.IsChecked = s.TrayShowsWatts;
             WidgetToggle.IsChecked = App.Current.IsWidgetVisible;
             UpdateToggle.IsChecked = s.AutoUpdate;
@@ -132,19 +149,7 @@ public partial class SimpleSettings : UserControl
         }
     }
 
-    private static void Select(ComboBox box, string name)
-    {
-        foreach (ComboBoxItem item in box.Items)
-        {
-            if (string.Equals((string)item.Tag, name, StringComparison.OrdinalIgnoreCase))
-            {
-                box.SelectedItem = item;
-                return;
-            }
-        }
-    }
-
-    private static string Describe(Profile? p) => p is null ? "" : char.ToUpperInvariant(Fmt.ProfileSummary(p)[0]) + Fmt.ProfileSummary(p)[1..] + ".";
+    private static string Describe(Profile? p) => p is null ? "Keeps whichever profile is on." : char.ToUpperInvariant(Fmt.ProfileSummary(p)[0]) + Fmt.ProfileSummary(p)[1..] + ".";
 
     private static string LimitDescription(AppSettings s)
     {
@@ -196,8 +201,19 @@ public partial class SimpleSettings : UserControl
             }
 
             KeyboardPanel.IsEnabled = state.CanWrite && state.Caps?.HasKeyboardLight != false;
+            var usbLight = state.Caps?.HasKeyboardColor == true;
+            KeyboardColorRow.Visibility = AutoOffDelayHost.Visibility = usbLight ? Visibility.Visible : Visibility.Collapsed;
+            KeyboardColorPanel.IsEnabled = state.CanWrite;
+            AutoOffDelayHost.IsEnabled = state.CanWrite && app.Store.Current.KeyboardTimeout != KeyboardTimeout.AlwaysOn;
+            AutoOffText.Text = usbLight
+                ? "When the laptop's keyboard isn't used for that long; its next key press brings the light back."
+                : "After about 10 seconds; any key brings it back.";
             AutoOffToggle.IsEnabled = state.CanWrite && state.Caps?.HasKeyboardTimeout != false;
             AcProfile.IsEnabled = DcProfile.IsEnabled = state.CanWrite;
+            ScreenKeysToggle.IsEnabled = app.Hardware.ControlsHardware;
+            ScreenKeysText.Text = app.Screen.Problem is { } screenProblem && app.Store.Current.ScreenHotkeys
+                ? screenProblem
+                : "Alt+Page Down dims, Alt+Page Up brightens, down past the lowest setting, like f.lux.";
 
             RefreshGraphics(state);
             RefreshCalibration(state);
@@ -318,7 +334,7 @@ public partial class SimpleSettings : UserControl
 
     private void OnProfileChoice(object sender, SelectionChangedEventArgs e)
     {
-        if (_loading || AcProfile.SelectedItem is not ComboBoxItem ac || DcProfile.SelectedItem is not ComboBoxItem dc)
+        if (_loading || AcProfile.SelectedItem is null || DcProfile.SelectedItem is null)
         {
             return;
         }
@@ -326,9 +342,17 @@ public partial class SimpleSettings : UserControl
         App.Current.Store.Update(s =>
         {
             s.AutoSwitchProfiles = true;
-            s.AcProfile = (string)ac.Tag;
-            s.BatteryProfile = (string)dc.Tag;
+            s.AcProfile = Choices.ProfileOf(AcProfile);
+            s.BatteryProfile = Choices.ProfileOf(DcProfile);
         });
+    }
+
+    private void OnScreenKeys(object sender, RoutedEventArgs e)
+    {
+        var on = ScreenKeysToggle.IsChecked == true;
+        App.Current.Store.Update(s => s.ScreenHotkeys = on);
+        App.Current.Screen.SetHotkeys(on);
+        RefreshState();
     }
 
     private async void OnAutoOff(object sender, RoutedEventArgs e) =>
@@ -365,20 +389,21 @@ public partial class SimpleSettings : UserControl
         RefreshStartup(await Task.Run(StartupTask.IsEnabled));
     }
 
-    private void OnCalibration(object sender, RoutedEventArgs e)
+    private async void OnCalibration(object sender, RoutedEventArgs e)
     {
+        // The hardware calls wait for the hardware lock: off the UI thread.
         var owner = Window.GetWindow(this);
         if (App.Current.Store.Current.Calibration is not null)
         {
             if (MessageBox.Show(owner, "Stop the calibration? Your normal charge limit takes over again.", "Battery calibration", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
             {
-                App.Current.Hardware.CancelCalibration();
+                await Task.Run(App.Current.Hardware.CancelCalibration);
             }
         }
         else if (MessageBox.Show(owner,
                      "Calibration will:\n\n1. Charge the battery to 100%.\n2. Run it down to about 8% with the charger still plugged in.\n3. Hand back to your normal charge limit.\n\nKeep the charger connected the whole time. The laptop stays awake, you can keep using it, and you can cancel any time.\n\nStart now?",
                      "Battery calibration", MessageBoxButton.OKCancel, MessageBoxImage.Information) == MessageBoxResult.OK
-                 && App.Current.Hardware.StartCalibration(fast: false) is { } error)
+                 && await Task.Run(() => App.Current.Hardware.StartCalibration(fast: false)) is { } error)
         {
             MessageBox.Show(owner, error, "Battery calibration", MessageBoxButton.OK, MessageBoxImage.Warning);
         }

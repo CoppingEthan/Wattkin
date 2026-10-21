@@ -23,8 +23,19 @@ public enum WindowsPowerMode
 public sealed class Profile
 {
     public string Name { get; set; } = "Profile";
-    public ShiftMode Performance { get; set; } = ShiftMode.Balanced;
-    /// <summary>Null = leave the fan mode alone (e.g. keep a custom curve set by MSI Center).</summary>
+
+    /// <summary>
+    /// The firmware's CPU power limits (MSI's shift mode). Null = leave the register alone, for power
+    /// limits set elsewhere (BIOS, ThrottleStop). Written even when null, so that survives a restart.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public ShiftMode? Performance { get; set; } = ShiftMode.Balanced;
+
+    /// <summary>
+    /// Null = leave the fan mode alone (e.g. keep a custom curve set by MSI Center). Written even when
+    /// null: until 1.1.1 a null was left out of the file and came back as Auto after a restart.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
     public FanMode? Fan { get; set; } = FanMode.Auto;
     /// <summary>
     /// With <see cref="FanMode.Custom"/>: the <see cref="FanProfile"/> to use, by name, or
@@ -36,6 +47,13 @@ public sealed class Profile
     public WindowsPowerMode WindowsMode { get; set; } = WindowsPowerMode.Balanced;
     public bool? CpuBoost { get; set; }
     public int? MaxCpuPercent { get; set; }
+
+    /// <summary>The power plan's energy performance preference, 0 (performance) to 100 (efficiency).</summary>
+    public int? EnergyPreference { get; set; }
+
+    /// <summary>The power plan's maximum processor frequency in MHz; 0 = no cap.</summary>
+    public int? MaxFrequencyMHz { get; set; }
+
     public int? RefreshRate { get; set; }
     public int? KeyboardLevel { get; set; }
 
@@ -95,7 +113,14 @@ public sealed class FanProfile
     public string Name { get; set; } = "Fan profile";
     public FanSpeeds Speeds { get; set; } = new();
 
-    public FanProfile Clone() => new() { Name = Name, Speeds = Speeds.Clone() };
+    /// <summary>
+    /// On a laptop where Wattkin writes whole fan tables (<see cref="FanTable"/>): this fan profile's
+    /// table, temperatures included; <see cref="Speeds"/> is kept in step with its first six speeds.
+    /// Null: the speeds run at the laptop's own temperature steps.
+    /// </summary>
+    public FanTable? Table { get; set; }
+
+    public FanProfile Clone() => new() { Name = Name, Speeds = Speeds.Clone(), Table = Table?.Clone() };
 
     public static bool IsBuiltIn(string? name) =>
         string.Equals(name, LaptopDefault, StringComparison.OrdinalIgnoreCase) || string.Equals(name, Off, StringComparison.OrdinalIgnoreCase);
@@ -141,16 +166,56 @@ public sealed class AppSettings
     public string ActiveProfile { get; set; } = "Balanced";
     /// <summary>Whether the charger was connected when <see cref="ActiveProfile"/> was applied (null: unknown).</summary>
     public bool? ActiveProfileOnAc { get; set; }
+
+    /// <summary>
+    /// The battery level when <see cref="ActiveProfile"/> was applied. After a restart on a low battery it
+    /// says whether the low-battery rule was already dealt with (picked by the rule, or by hand while low).
+    /// </summary>
+    public double? ActiveProfilePercent { get; set; }
+
+    // Automatic switching: each rule names a profile, or null to leave the profile alone. Nulls are
+    // written to the file, so "leave alone" survives a restart instead of coming back as the default.
     public bool AutoSwitchProfiles { get; set; } = true;
-    public string AcProfile { get; set; } = "Balanced";
-    public string BatteryProfile { get; set; } = "Balanced";
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public string? AcProfile { get; set; } = "Balanced";
+    /// <summary>On battery, above <see cref="LowBatteryThreshold"/>.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public string? BatteryProfile { get; set; } = "Balanced";
     /// <summary>On battery, switch to <see cref="LowBatteryProfile"/> at or below this %. 0 = off.</summary>
     public int LowBatteryThreshold { get; set; } = 30;
-    public string LowBatteryProfile { get; set; } = "Battery saver";
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public string? LowBatteryProfile { get; set; } = "Battery saver";
 
-    // Keyboard, LEDs, hotkeys
+    // Keyboard, LEDs, hotkeys. Where the keys are lit by a USB controller that can't be read back (the
+    // Stealth 15M's Mystic Light), KeyboardLevel is also what Wattkin last set, sent again at startup.
     public int? KeyboardLevel { get; set; }
+    /// <summary>"#RRGGBB": the keyboard's colour where the light is RGB (see Hardware.MysticLight).</summary>
+    public string KeyboardColor { get; set; } = LightColor.White.Hex;
     public KeyboardTimeout KeyboardTimeout { get; set; } = KeyboardTimeout.AlwaysOn;
+
+    /// <summary>
+    /// Seconds without a key press before auto-off, where Wattkin does it itself (the USB light); the
+    /// EC's own auto-off is fixed at about 10 s.
+    /// </summary>
+    public int KeyboardAutoOffSeconds { get; set; } = 10;
+    public const int KeyboardAutoOffMinSeconds = 5;
+    public const int KeyboardAutoOffMaxSeconds = 300;
+
+    // Screen brightness (see Features.ScreenBrightness): Alt+Page Down / Page Up as global keys, and the
+    // "extra dim" level below the backlight's lowest (100 = off). A copy restarting into an update hands
+    // its dim over (ScreenDimHandoffUtc) so the new one keeps it without a flash; otherwise a start
+    // begins at normal brightness.
+    public bool ScreenHotkeys { get; set; }
+    public int ScreenExtraDimPercent { get; set; } = 100;
+    public DateTime? ScreenDimHandoffUtc { get; set; }
+    /// <summary>Wattkin allowed Windows' full gamma range (GdiICMGammaRange); uninstalling takes it back.</summary>
+    public bool ScreenGammaRangeSet { get; set; }
+
+    /// <summary>
+    /// While dimmed: each display's own gamma ramp from before (a colour calibration lives there), by GDI
+    /// name, base64. Un-dimming puts them back, also after a restart into an update or a crash.
+    /// </summary>
+    public Dictionary<string, string>? ScreenBaseRamps { get; set; }
     public bool SyncMuteLeds { get; set; } = true;
     public bool HandleHotkeys { get; set; } = true;
     public bool ShowOsd { get; set; } = true;
@@ -184,6 +249,23 @@ public sealed class AppSettings
     public List<FanProfile> FanProfiles { get; set; } = FanProfile.Defaults();
     public FanSpeeds? FactoryFanCurve { get; set; }
     public bool UnrestrictedFanCurves { get; set; }
+
+    /// <summary>
+    /// The controller's whole fan table the first time Wattkin read it, on a laptop where it writes
+    /// whole tables: "Laptop default", and what uninstalling puts back. If another tool (YAMDCC) had
+    /// written its own table before, that's the one kept.
+    /// </summary>
+    public FanTable? FactoryFanTable { get; set; }
+
+    /// <summary>This laptop has been seen in MSI's Sport mode (0xC0) by itself, so Wattkin offers Sport too.</summary>
+    public bool SportModeSeen { get; set; }
+
+    /// <summary>
+    /// Set while a fan mode is forced (Debug page, fan tests): Cooler Boost as it was before. Still set at
+    /// a start, Wattkin was killed mid-force, and it's put back then (a profile leaving the fans alone
+    /// wouldn't otherwise turn a forced full speed off).
+    /// </summary>
+    public bool? CoolerBoostBeforeForce { get; set; }
 
     // The battery in the laptop (Windows' unique ID for it, and what it last held when full) and when a
     // different one was first seen: capacity history and calibration advice start again from then.
@@ -230,6 +312,32 @@ public sealed class AppSettings
     };
 
     /// <summary>
+    /// Where the laptop takes whole fan tables: the table a profile's fan choice stands for (the same
+    /// choices as <see cref="ResolveFanCurve"/>). Speeds without a table of their own run at the laptop's
+    /// temperatures. Null when no table of the laptop's is known yet (the speeds-only path is used then).
+    /// </summary>
+    public FanTable? ResolveFanTable(Profile profile) => profile.FanProfileName switch
+    {
+        null => FactoryFanTable,
+        var name when string.Equals(name, FanProfile.LaptopDefault, StringComparison.OrdinalIgnoreCase) => FactoryFanTable,
+        var name when string.Equals(name, FanProfile.Off, StringComparison.OrdinalIgnoreCase) => FactoryFanTable is { } factory ? FanTable.Off(factory) : null,
+        var name => FindFanProfile(name) is { } fan ? fan.Table ?? FactoryFanTable?.WithSpeeds(fan.Speeds) : FactoryFanTable,
+    };
+
+    /// <summary>
+    /// The profile the automatic rules pick for this power state (on the charger; on battery above the
+    /// threshold; at or below it), or null when the matching rule leaves the profile alone.
+    /// </summary>
+    public string? AutoProfile(bool onAc, double? percent) =>
+        !AutoSwitchProfiles ? null
+        : onAc ? AcProfile
+        : IsLow(percent) && LowBatteryProfile is { } low ? low // "Leave as is" here: no low-battery rule, the battery one applies
+        : BatteryProfile;
+
+    /// <summary>At or below the low-battery threshold (on battery), when there is one.</summary>
+    public bool IsLow(double? percent) => LowBatteryThreshold > 0 && percent is { } p && p <= LowBatteryThreshold;
+
+    /// <summary>
     /// Quiet and Cool as shipped suit the Prestige 16 Studio's fan table. On a laptop whose table can't
     /// take them (the Katana GF66 12UG's tops out at 75%), copies nobody has edited are rebuilt from the
     /// laptop's own curve. Returns the names rebuilt.
@@ -271,7 +379,9 @@ public sealed class AppSettings
     /// </summary>
     public void Normalize()
     {
-        Profiles = Profiles is { Count: > 0 } ? [.. Profiles.Where(p => p is not null && !string.IsNullOrWhiteSpace(p.Name))] : Profile.Defaults();
+        // A repeated name (a hand-edited file) can't be picked or edited apart: only the first is kept.
+        var profileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        Profiles = Profiles is { Count: > 0 } ? [.. Profiles.Where(p => p is not null && !string.IsNullOrWhiteSpace(p.Name) && profileNames.Add(p.Name))] : Profile.Defaults();
         if (Profiles.Count == 0)
         {
             Profiles = Profile.Defaults();
@@ -279,7 +389,7 @@ public sealed class AppSettings
 
         foreach (var p in Profiles)
         {
-            if (!Enum.IsDefined(p.Performance))
+            if (p.Performance is { } shift && !Enum.IsDefined(shift))
             {
                 p.Performance = ShiftMode.Balanced;
             }
@@ -295,8 +405,27 @@ public sealed class AppSettings
             }
 
             p.MaxCpuPercent = p.MaxCpuPercent is { } m ? Math.Clamp(m, 5, 100) : null;
+            p.EnergyPreference = p.EnergyPreference is { } epp ? Math.Clamp(epp, 0, 100) : null;
+            p.MaxFrequencyMHz = p.MaxFrequencyMHz is { } mhz ? (mhz <= 0 ? 0 : Math.Clamp(mhz, 400, 8000)) : null;
             p.KeyboardLevel = p.KeyboardLevel is { } k ? Math.Clamp(k, 0, 3) : null;
             p.RefreshRate = p.RefreshRate is > 0 and < 1000 ? p.RefreshRate : null;
+        }
+
+        // A whole table that breaks the hard rules is dropped (its speeds stay, at the laptop's
+        // temperatures); a good one sets the speeds, so the speeds-only path agrees with it.
+        foreach (var f in FanProfiles ?? [])
+        {
+            if (f?.Table is { } table)
+            {
+                if (table.Problem(unrestricted: true) is null)
+                {
+                    f.Speeds = table.ToSpeeds();
+                }
+                else
+                {
+                    f.Table = null;
+                }
+            }
         }
 
         // A malformed fan profile never reaches the controller: it's dropped, and profiles that used it
@@ -317,6 +446,11 @@ public sealed class AppSettings
             FactoryFanCurve = null;
         }
 
+        if (FactoryFanTable?.Problem(unrestricted: true) is not null)
+        {
+            FactoryFanTable = null;
+        }
+
         // 1: Quiet moved from Silent to the fan curve. Only a Quiet still on the old built-in fan
         // setting is moved; one the user changed is left alone.
         if (ProfilesVersion < 1)
@@ -333,6 +467,10 @@ public sealed class AppSettings
         ChargeResumeBelow = ChargeResumeBelow is { } r ? Math.Clamp(r, 0, 99) : null;
         LowBatteryThreshold = Math.Clamp(LowBatteryThreshold, 0, 90);
         KeyboardLevel = KeyboardLevel is { } kb ? Math.Clamp(kb, 0, 3) : null;
+        KeyboardColor = (LightColor.Parse(KeyboardColor) ?? LightColor.White).Hex;
+        KeyboardAutoOffSeconds = Math.Clamp(KeyboardAutoOffSeconds, KeyboardAutoOffMinSeconds, KeyboardAutoOffMaxSeconds);
+        ScreenExtraDimPercent = Math.Clamp(ScreenExtraDimPercent, Features.ScreenBrightness.MinExtraDim, 100);
+        ScreenBaseRamps = ScreenBaseRamps?.Where(kv => !string.IsNullOrEmpty(kv.Key) && Platform.GammaRamp.Decode(kv.Value) is not null).ToDictionary() is { Count: > 0 } ramps ? ramps : null;
         if (!Enum.IsDefined(KeyboardTimeout))
         {
             KeyboardTimeout = KeyboardTimeout.AlwaysOn;
@@ -342,10 +480,12 @@ public sealed class AppSettings
         CalibrationHistory ??= [];
         OriginalPowerSettings ??= [];
         OriginalPowerModes ??= [];
-        ActiveProfile ??= Profiles[0].Name;
-        AcProfile ??= ActiveProfile;
-        BatteryProfile ??= ActiveProfile;
-        LowBatteryProfile ??= ActiveProfile;
+        ActiveProfile = FindProfile(ActiveProfile)?.Name ?? Profiles[0].Name;
+
+        // A rule naming a profile that's gone leaves the profile alone (null), as "Leave as is" does.
+        AcProfile = FindProfile(AcProfile)?.Name;
+        BatteryProfile = FindProfile(BatteryProfile)?.Name;
+        LowBatteryProfile = FindProfile(LowBatteryProfile)?.Name;
         if (LearnedRestOfSystemWatts is { } w && (!double.IsFinite(w) || w is < 0 or > 60))
         {
             LearnedRestOfSystemWatts = null;

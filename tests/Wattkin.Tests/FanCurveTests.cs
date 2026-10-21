@@ -36,6 +36,44 @@ public class FanCurveTests
 
     private static FanCurves Prestige() => new(FanCurve.Parse(CpuTemps, CpuSpeeds)!, FanCurve.Parse(GpuTemps, GpuSpeeds)!);
 
+    // A Prestige 13 AI Evo A1MG (EC 13Q2EMS1.110), from a tester's diagnostics report: one fan, so
+    // Get_Temperature(2) and Get_Fan(2) answer with zeros.
+    private static FanCurves Prestige13() => new(
+        FanCurve.Parse(Bytes("00-69-73-32-41-50-5F-64"), Bytes("26-26-28-32-46-46-46-46"))!,
+        FanCurve.Parse(Bytes("00-00-00-00-00-00-00-00"), Bytes("00-00-00-00-00-00-00-00"))!);
+
+    [Fact]
+    public void ALaptopWithOneFanGetsFanCurvesForThatFan()
+    {
+        var laptop = Prestige13();
+        Assert.Equal([50, 65, 80, 95, 100, 105], laptop.Cpu.Temps);
+        Assert.Equal([38, 40, 50, 70, 70, 70, 70], laptop.Cpu.Speeds);
+        Assert.True(laptop.Gpu.Absent);
+        Assert.False(laptop.HasGpuFan);
+        Assert.True(laptop.Sane); // 1.1.1 refused it: the missing GPU fan's all-zero table "wasn't safe"
+
+        // The GPU's speeds are never written there, so they don't count; the CPU fan keeps its rules.
+        var quiet = new FanSpeeds { Cpu = [0, 0, 30, 45, 56, 60], Gpu = [9, 9, 9, 9, 9, 9] };
+        Assert.Null(quiet.Problem(unrestricted: false, laptop));
+        Assert.NotNull(new FanSpeeds { Cpu = [0, 0, 30, 45, 50, 50], Gpu = quiet.Gpu }.Problem(unrestricted: false, laptop)); // under 56% (4/5 of 70) at the hottest editable step
+        Assert.True(FanSpeeds.From(laptop).Fits(laptop));
+
+        // And a two-fan laptop's GPU fan still counts.
+        Assert.True(Prestige().HasGpuFan);
+    }
+
+    [Fact]
+    public void MsisOwnLayoutIsRecognisedWithoutAKeyboardRegister()
+    {
+        // Until 1.1.1 the layout check also wanted the keyboard at 0xD3, which left msi-ec's families without
+        // one (Stealth, Raider, Vector, Titan: CONF_G2_10, G2_2, G2_5) without fan curves.
+        Assert.True(EmbeddedController.UsesMsiLayout(EcModels.Find("1563EMS1.111")));  // CONF_G2_10, no keyboard register
+        Assert.True(EmbeddedController.UsesMsiLayout(EcModels.Find("1543EMS1.108")));  // CONF_G2_2
+        Assert.True(EmbeddedController.UsesMsiLayout(EcModels.Find("1594EMS1.113")));  // the Prestige 16 Studio
+        Assert.True(EmbeddedController.UsesMsiLayout(EcModels.MsiStandardWmi2));
+        Assert.False(EmbeddedController.UsesMsiLayout(EcModels.Find("16R1EMS1.105"))); // older WMI v1 layout (0xF2 / 0xF4)
+    }
+
     [Fact]
     public void TablesThatCouldOverheatAreRejected()
     {
@@ -151,6 +189,13 @@ public class FanCurveTests
         Assert.False(EmbeddedController.ShiftRegisterLooksRight(msiLayout, 0xC3));
         var olderLayout = EcModels.Find("158LEMS1.105")!; // CONF_G1_2: no sport mode
         Assert.False(EmbeddedController.ShiftRegisterLooksRight(olderLayout, 0xC0));
+
+        // CONF_G2_10, where msi-ec says turbo is "sometimes 0xc0": 0xC0 isn't taken as Sport (read-only, as in 1.1.1).
+        var g210 = EcModels.Find("1822EMS1.111")!;
+        Assert.Equal("msi-ec CONF_G2_10", g210.Source);
+        Assert.False(EmbeddedController.ShiftRegisterLooksRight(g210, 0xC0));
+        Assert.True(EmbeddedController.ShiftRegisterLooksRight(g210, 0xC4));
+        Assert.True(EmbeddedController.ShiftRegisterLooksRight(EcModels.Find("1563EMS1.115")!, 0xC0)); // the Stealth 15M's own map names it
     }
 
     [Fact]

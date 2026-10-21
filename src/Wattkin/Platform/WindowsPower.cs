@@ -5,6 +5,14 @@ using Wattkin.Settings;
 namespace Wattkin.Platform;
 
 /// <summary>
+/// The active power plan's processor settings the power self-test lifts, on the charger and on battery:
+/// boost mode and maximum state, and maximum frequency and energy preference when the plan has them.
+/// </summary>
+public readonly record struct ProcessorPlan(
+    Guid Scheme, uint BoostAc, uint BoostDc, uint MaxAc, uint MaxDc,
+    (uint Ac, uint Dc)? Freq, (uint Ac, uint Dc)? Epp, (uint Ac, uint Dc)? Freq1 = null, (uint Ac, uint Dc)? Epp1 = null);
+
+/// <summary>
 /// Windows power mode (Settings > Power) and processor power-plan knobs. Everything Wattkin changes is
 /// remembered first, keyed by power plan, so "Restore" and uninstall can put the user's values back.
 /// </summary>
@@ -20,14 +28,27 @@ public static class WindowsPower
     private static readonly Guid BatterySubgroup = new("e73a048d-bf27-4f12-9731-8b2076e8891f");
     private static readonly Guid CriticalBatteryLevel = new("9a66d8d7-4ff7-4ef9-b5a2-5a326ca2a469");
 
+    // PERFEPP / PERFEPP1 (0–100 %, higher saves energy) and PROCFREQMAX / PROCFREQMAX1 (MHz, 0 = no cap):
+    // the "1" settings are for processor power-efficiency class 1, a hybrid CPU's faster cores (winnt.h);
+    // both are set alike so a profile holds on any CPU.
+    private static readonly Guid EnergyPreference = new("36687f9e-e3a5-4dbf-b1dc-15eb381c6863");
+    private static readonly Guid EnergyPreference1 = new("36687f9e-e3a5-4dbf-b1dc-15eb381c6864");
+    private static readonly Guid MaxFrequency = new("75b0ae3f-bce0-45a7-8c89-c9611c25e100");
+    private static readonly Guid MaxFrequency1 = new("75b0ae3f-bce0-45a7-8c89-c9611c25e101");
+
     private const uint BoostDisabled = 0;
     private const uint BoostAggressive = 2;
 
-    // Only these settings are ever written back from saved originals (the file is user-writable).
-    private static readonly Dictionary<string, Guid> RestorableSettings = new()
+    // Only these settings are ever written back from saved originals (the file is user-writable), each
+    // with the largest value it may take.
+    private static readonly Dictionary<string, (Guid Setting, uint Max)> RestorableSettings = new()
     {
-        ["boost"] = BoostMode,
-        ["maxstate"] = MaxProcessorState,
+        ["boost"] = (BoostMode, 100),
+        ["maxstate"] = (MaxProcessorState, 100),
+        ["epp"] = (EnergyPreference, 100),
+        ["epp1"] = (EnergyPreference1, 100),
+        ["freqmax"] = (MaxFrequency, 10000),
+        ["freqmax1"] = (MaxFrequency1, 10000),
     };
 
     private static readonly bool HasPerSourceModes =
@@ -121,6 +142,70 @@ public static class WindowsPower
         }
     }
 
+    /// <summary>
+    /// Energy performance preference in the active plan (AC and DC), 0 = performance, 100 = efficiency:
+    /// how eagerly the processor (Intel Speed Shift) raises its clock for light and medium work.
+    /// Windows' "Best power efficiency" mode can override it.
+    /// </summary>
+    public static void SetEnergyPreference(int percent, AppSettings settings)
+    {
+        if (TryActiveScheme(out var scheme))
+        {
+            WriteProcessor(scheme, EnergyPreference, (uint)Math.Clamp(percent, 0, 100), settings, "epp");
+            WriteProcessor(scheme, EnergyPreference1, (uint)Math.Clamp(percent, 0, 100), settings, "epp1");
+        }
+    }
+
+    /// <summary>Maximum processor frequency in the active plan (AC and DC), in MHz; 0 lifts the cap.</summary>
+    public static void SetMaxFrequency(int mhz, AppSettings settings)
+    {
+        if (TryActiveScheme(out var scheme))
+        {
+            WriteProcessor(scheme, MaxFrequency, (uint)Math.Clamp(mhz, 0, 10000), settings, "freqmax");
+            WriteProcessor(scheme, MaxFrequency1, (uint)Math.Clamp(mhz, 0, 10000), settings, "freqmax1");
+        }
+    }
+
+    /// <summary>The active plan's processor settings as they are, for the self-test to put back; null if unreadable.</summary>
+    public static ProcessorPlan? ReadProcessorPlan() =>
+        TryActiveScheme(out var scheme) && Read(scheme, BoostMode) is { } boost && Read(scheme, MaxProcessorState) is { } max
+            ? new ProcessorPlan(scheme, boost.Ac, boost.Dc, max.Ac, max.Dc, Read(scheme, MaxFrequency), Read(scheme, EnergyPreference), Read(scheme, MaxFrequency1), Read(scheme, EnergyPreference1))
+            : null;
+
+    /// <summary>Writes a plan's processor settings as given (no originals recorded: the self-test puts its own snapshot back) and applies them.</summary>
+    public static void WriteProcessorPlan(ProcessorPlan plan)
+    {
+        PowrProf.PowerWriteACValueIndex(IntPtr.Zero, plan.Scheme, ProcessorSubgroup, BoostMode, plan.BoostAc);
+        PowrProf.PowerWriteDCValueIndex(IntPtr.Zero, plan.Scheme, ProcessorSubgroup, BoostMode, plan.BoostDc);
+        PowrProf.PowerWriteACValueIndex(IntPtr.Zero, plan.Scheme, ProcessorSubgroup, MaxProcessorState, plan.MaxAc);
+        PowrProf.PowerWriteDCValueIndex(IntPtr.Zero, plan.Scheme, ProcessorSubgroup, MaxProcessorState, plan.MaxDc);
+        foreach (var (setting, values) in new[] { (MaxFrequency, plan.Freq), (EnergyPreference, plan.Epp), (MaxFrequency1, plan.Freq1), (EnergyPreference1, plan.Epp1) })
+        {
+            if (values is { } v)
+            {
+                PowrProf.PowerWriteACValueIndex(IntPtr.Zero, plan.Scheme, ProcessorSubgroup, setting, v.Ac);
+                PowrProf.PowerWriteDCValueIndex(IntPtr.Zero, plan.Scheme, ProcessorSubgroup, setting, v.Dc);
+            }
+        }
+
+        PowrProf.PowerSetActiveScheme(IntPtr.Zero, plan.Scheme);
+    }
+
+    /// <summary>
+    /// Full speed on the charger (where the self-test measures): turbo on (aggressive), no state or
+    /// frequency cap, and energy preference 0. The on-battery values stay as they are, so a self-test
+    /// that dies midway can't leave the battery plan flat out.
+    /// </summary>
+    public static ProcessorPlan Unlimited(ProcessorPlan plan) => plan with
+    {
+        BoostAc = BoostAggressive,
+        MaxAc = 100,
+        Freq = plan.Freq is { } f ? (0, f.Dc) : null,
+        Epp = plan.Epp is { } e ? (0, e.Dc) : null,
+        Freq1 = plan.Freq1 is { } f1 ? (0, f1.Dc) : null, // a hybrid CPU's faster cores: a profile's cap there too
+        Epp1 = plan.Epp1 is { } e1 ? (0, e1.Dc) : null,
+    };
+
     public static bool? GetCpuBoost(bool onAc)
     {
         if (!TryActiveScheme(out var scheme))
@@ -152,14 +237,12 @@ public static class WindowsPower
         var touched = new HashSet<Guid>();
         foreach (var (key, value) in settings.OriginalPowerSettings)
         {
-            // key = "{scheme}:{setting}:{ac|dc}"
-            var parts = key.Split(':');
-            if (parts.Length != 3 || !Guid.TryParse(parts[0], out var scheme) || !RestorableSettings.TryGetValue(parts[1], out var setting) || value > 100)
+            if (!TryParseOriginal(key, value, out var scheme, out var setting, out var onAc))
             {
                 continue;
             }
 
-            var status = parts[2] == "ac"
+            var status = onAc
                 ? PowrProf.PowerWriteACValueIndex(IntPtr.Zero, scheme, ProcessorSubgroup, setting, value)
                 : PowrProf.PowerWriteDCValueIndex(IntPtr.Zero, scheme, ProcessorSubgroup, setting, value);
             if (status == 0)
@@ -199,6 +282,27 @@ public static class WindowsPower
 
         settings.OriginalPowerSettings.Clear();
         settings.OriginalPowerModes.Clear();
+    }
+
+    /// <summary>
+    /// A saved original from settings.json, key "{scheme}:{setting}:{ac|dc}": accepted only for a setting
+    /// Wattkin writes and a value that setting can take, as the file is user-writable and the restore isn't.
+    /// </summary>
+    internal static bool TryParseOriginal(string key, uint value, out Guid scheme, out Guid setting, out bool onAc)
+    {
+        scheme = Guid.Empty;
+        setting = Guid.Empty;
+        onAc = false;
+        var parts = key.Split(':');
+        if (parts.Length != 3 || parts[2] is not ("ac" or "dc") || !Guid.TryParse(parts[0], out scheme)
+            || !RestorableSettings.TryGetValue(parts[1], out var restorable) || value > restorable.Max)
+        {
+            return false;
+        }
+
+        setting = restorable.Setting;
+        onAc = parts[2] == "ac";
+        return true;
     }
 
     private static string Key(Guid scheme, string setting, string source) => $"{scheme}:{setting}:{source}";

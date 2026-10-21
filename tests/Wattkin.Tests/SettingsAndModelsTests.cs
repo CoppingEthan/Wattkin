@@ -116,9 +116,74 @@ public sealed class SettingsAndModelsTests : IDisposable
         settings.ActiveProfileOnAc = null;
         Assert.Equal("Balanced", HardwareService.StartupProfile(settings, onAc: true));
 
+        // Unplugged and already low: the low-battery profile.
+        settings.ActiveProfileOnAc = true;
+        settings.LowBatteryProfile = "Performance";
+        Assert.Equal("Performance", HardwareService.StartupProfile(settings, onAc: false, percent: 20));
+
+        // A rule that leaves the profile alone keeps the picked one.
+        settings.BatteryProfile = null;
+        Assert.Equal("Quiet", HardwareService.StartupProfile(settings, onAc: false, percent: 50));
+
         // Without automatic switching, always the picked profile.
         settings.AutoSwitchProfiles = false;
         Assert.Equal("Quiet", HardwareService.StartupProfile(settings, onAc: false));
+    }
+
+    [Fact]
+    public void TheAutomaticRulesPickByPowerSourceAndBatteryLevel()
+    {
+        var s = new AppSettings { AcProfile = "Performance", BatteryProfile = "Balanced", LowBatteryProfile = "Battery saver", LowBatteryThreshold = 30 };
+        Assert.Equal("Performance", s.AutoProfile(onAc: true, percent: 10));
+        Assert.Equal("Balanced", s.AutoProfile(onAc: false, percent: 31));
+        Assert.Equal("Battery saver", s.AutoProfile(onAc: false, percent: 30));
+        Assert.Equal("Balanced", s.AutoProfile(onAc: false, percent: null)); // level unknown: not "low"
+
+        s.LowBatteryProfile = null; // "Leave as is" for low battery: no low rule, so the battery one still applies
+        Assert.Equal("Balanced", s.AutoProfile(onAc: false, percent: 20));
+        s.LowBatteryProfile = "Battery saver";
+
+        s.LowBatteryThreshold = 0; // no threshold: one battery rule
+        Assert.Equal("Balanced", s.AutoProfile(onAc: false, percent: 5));
+
+        s.BatteryProfile = null; // leave as is
+        Assert.Null(s.AutoProfile(onAc: false, percent: 50));
+
+        s.AutoSwitchProfiles = false;
+        Assert.Null(s.AutoProfile(onAc: true, percent: 50));
+    }
+
+    [Fact]
+    public void UnchangedAndLeaveAsIsSurviveARestart()
+    {
+        // Until 1.1.1 a profile's "Unchanged" fans were left out of the file and came back as Auto.
+        var store = new SettingsStore(_dir);
+        store.Update(s =>
+        {
+            s.AcProfile = null;
+            s.FindProfile("Performance")!.Fan = null;
+            s.FindProfile("Performance")!.Performance = null; // power limits left to the BIOS
+            s.FindProfile("Performance")!.CpuBoost = null;
+        });
+        var reloaded = new SettingsStore(_dir).Current;
+        Assert.Null(reloaded.AcProfile);
+        Assert.Null(reloaded.FindProfile("Performance")!.Fan);
+        Assert.Null(reloaded.FindProfile("Performance")!.Performance);
+        Assert.Null(reloaded.FindProfile("Performance")!.CpuBoost);
+        Assert.Equal(ShiftMode.Eco, reloaded.FindProfile("Battery saver")!.Performance);
+        Assert.Equal("Balanced", reloaded.BatteryProfile);
+
+        // A rule naming a profile that's gone leaves the profile alone; the active one falls back to the first.
+        reloaded.BatteryProfile = "Deleted";
+        reloaded.ActiveProfile = "Deleted";
+        reloaded.Normalize();
+        Assert.Null(reloaded.BatteryProfile);
+        Assert.Equal("Battery saver", reloaded.ActiveProfile);
+
+        // A profile that changes nothing says so; one that sets only the usual values doesn't claim to.
+        Assert.Equal("leaves everything as it is", Wattkin.UI.Fmt.ProfileDetails(new Profile { Performance = null, Fan = null, WindowsMode = WindowsPowerMode.Unchanged }));
+        Assert.Equal("leaves everything as it is", Wattkin.UI.Fmt.ProfileSummary(new Profile { Performance = null, Fan = null, WindowsMode = WindowsPowerMode.Unchanged }));
+        Assert.Equal("normal settings", Wattkin.UI.Fmt.ProfileSummary(new Profile { Performance = null, Fan = FanMode.Auto, CpuBoost = true, WindowsMode = WindowsPowerMode.Unchanged }));
     }
 
     [Fact]
@@ -152,17 +217,22 @@ public sealed class SettingsAndModelsTests : IDisposable
     [Fact]
     public void NormalizeRepairsOutOfRangeValues()
     {
-        var s = new AppSettings { ChargeLimit = 250, ChargeResumeBelow = -4, LowBatteryThreshold = 200, WidgetOpacity = double.NaN, KeyboardLevel = 9 };
-        s.Profiles = [new Profile { Name = "x", MaxCpuPercent = 400, KeyboardLevel = -1, RefreshRate = 0 }];
+        var s = new AppSettings { ChargeLimit = 250, ChargeResumeBelow = -4, LowBatteryThreshold = 200, WidgetOpacity = double.NaN, KeyboardLevel = 9, KeyboardAutoOffSeconds = 1, ScreenExtraDimPercent = 2 };
+        s.Profiles = [new Profile { Name = "x", MaxCpuPercent = 400, KeyboardLevel = -1, RefreshRate = 0, EnergyPreference = 150, MaxFrequencyMHz = 99999 }, new Profile { Name = "y", MaxFrequencyMHz = -5 }];
         s.Normalize();
         Assert.Equal(100, s.ChargeLimit);
         Assert.Equal(0, s.ChargeResumeBelow);
         Assert.Equal(90, s.LowBatteryThreshold);
         Assert.Equal(0.92, s.WidgetOpacity);
         Assert.Equal(3, s.KeyboardLevel);
+        Assert.Equal(AppSettings.KeyboardAutoOffMinSeconds, s.KeyboardAutoOffSeconds);
+        Assert.Equal(ScreenBrightness.MinExtraDim, s.ScreenExtraDimPercent);
         Assert.Equal(100, s.Profiles[0].MaxCpuPercent);
         Assert.Equal(0, s.Profiles[0].KeyboardLevel);
         Assert.Null(s.Profiles[0].RefreshRate);
+        Assert.Equal(100, s.Profiles[0].EnergyPreference);
+        Assert.Equal(8000, s.Profiles[0].MaxFrequencyMHz);
+        Assert.Equal(0, s.Profiles[1].MaxFrequencyMHz); // no cap
     }
 
     [Fact]

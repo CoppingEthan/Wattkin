@@ -47,6 +47,42 @@ internal static class WindowEffects
         var dark = App.Current.IsLightTheme ? 0 : 1;
         DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, sizeof(int));
     }
+
+    private const int DWMWA_CLOAK = 13;
+
+    /// <summary>
+    /// Shows a window only once it's in place. The compositor hides it ("cloaks" it) while it's shown,
+    /// laid out and moved, then reveals it after WPF has drawn it there. Without this, a window's first
+    /// showing after a start flashed half-drawn in the top-left corner, where Windows first puts a window
+    /// (a user's report, 2026-10-16). It stays on its real monitor throughout, so mixed display scaling
+    /// places it as before.
+    /// </summary>
+    public static void ShowWhenPlaced(Window window, Action showAndPlace)
+    {
+        // Already showing (an OSD updated while it's up): hiding it again would make it blink.
+        if (window.IsVisible)
+        {
+            showAndPlace();
+            return;
+        }
+
+        var hwnd = new System.Windows.Interop.WindowInteropHelper(window).EnsureHandle();
+        var cloak = 1;
+        DwmSetWindowAttribute(hwnd, DWMWA_CLOAK, ref cloak, sizeof(int));
+        try
+        {
+            showAndPlace();
+        }
+        finally
+        {
+            // After the next render pass, so the first frame seen is the placed one.
+            window.Dispatcher.BeginInvoke(() =>
+            {
+                var uncloak = 0;
+                DwmSetWindowAttribute(hwnd, DWMWA_CLOAK, ref uncloak, sizeof(int));
+            }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+        }
+    }
 }
 
 /// <summary>A custom-drawn element that redraws when the light/dark palette changes.</summary>

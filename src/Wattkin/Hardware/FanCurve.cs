@@ -38,6 +38,12 @@ public sealed record FanCurve(IReadOnlyList<int> Temps, IReadOnlyList<int> Speed
     public const int MinTopSpeed = 50;
 
     /// <summary>
+    /// No fan behind this table: the firmware answers with all zeros, as for the GPU fan of the Prestige
+    /// 13 AI Evo A1MG (EC 13Q2EMS1.110), which has one fan (a user's diagnostics report, 2026-10-16).
+    /// </summary>
+    public bool Absent => Temps.All(t => t == 0) && Speeds.All(s => s == 0);
+
+    /// <summary>
     /// Safe to hand the fans to: temperatures rising through a plausible range, speeds never falling, and
     /// the top step fast enough to be a real fan table's (<see cref="MinTopSpeed"/>).
     /// </summary>
@@ -65,10 +71,12 @@ public sealed record FanCurve(IReadOnlyList<int> Temps, IReadOnlyList<int> Speed
     private static string Speed(int percent) => percent == 0 ? "off" : percent.ToString(CultureInfo.InvariantCulture) + "%";
 }
 
-/// <summary>Both fans' tables.</summary>
+/// <summary>Both fans' tables. On a laptop with one fan the GPU's is <see cref="FanCurve.Absent"/>.</summary>
 public sealed record FanCurves(FanCurve Cpu, FanCurve Gpu)
 {
-    public bool Sane => Cpu.Sane && Gpu.Sane;
+    public bool HasGpuFan => !Gpu.Absent;
+
+    public bool Sane => Cpu.Sane && (Gpu.Absent || Gpu.Sane);
 }
 
 /// <summary>
@@ -144,6 +152,11 @@ public sealed class FanSpeeds
     {
         foreach (var (name, speeds, table) in new[] { ("CPU", Cpu, laptop?.Cpu), ("GPU", Gpu, laptop?.Gpu) })
         {
+            if (table is { Absent: true })
+            {
+                continue; // no such fan: its speeds are never written
+            }
+
             if (speeds is not { Length: Steps } || speeds.Any(s => s is < 0 or > Max))
             {
                 return $"The {name} fan needs {Steps} speeds between 0 and {Max}%.";
@@ -171,5 +184,5 @@ public sealed class FanSpeeds
 
     /// <summary>Usable on this laptop: passes the safety rules and never faster than a fan's fixed top step.</summary>
     public bool Fits(FanCurves laptop) =>
-        Problem(unrestricted: false, laptop) is null && Cpu.All(s => s <= laptop.Cpu.Speeds[^1]) && Gpu.All(s => s <= laptop.Gpu.Speeds[^1]);
+        Problem(unrestricted: false, laptop) is null && Cpu.All(s => s <= laptop.Cpu.Speeds[^1]) && (laptop.Gpu.Absent || Gpu.All(s => s <= laptop.Gpu.Speeds[^1]));
 }

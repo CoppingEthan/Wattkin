@@ -1,4 +1,7 @@
-# Installs (or updates) Wattkin from your own build in .\dist: run .\build.ps1 first.
+# Installs (or updates) Wattkin from your own build in .\dist: build it first.
+#   powershell -ExecutionPolicy Bypass -File .\build.ps1
+#   powershell -ExecutionPolicy Bypass -File .\install.ps1
+# (-ExecutionPolicy Bypass where Windows blocks scripts; it applies to that run only.)
 # This is the same installer the downloaded Wattkin.exe runs: it copies itself to Program Files,
 # adds the Start-menu shortcut and the Settings › Apps entry, and sets up start-with-Windows.
 param([switch]$NoAutostart)
