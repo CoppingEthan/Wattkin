@@ -28,3 +28,4 @@ foreach ($name in $wanted) {
 
 [IO.Directory]::Delete($raw, $true)
 "Screenshots written to $((Resolve-Path $images).Path)"
+& (Join-Path $PSScriptRoot 'hero.ps1') -Images $images # the README's top image, from these

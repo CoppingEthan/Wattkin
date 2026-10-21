@@ -16,9 +16,7 @@ A small tray app that replaces MSI Center on MSI laptops. It shows how many watt
 <sub>Measured on the same MSI Prestige 16 Studio: MSI Center with its background services running, Wattkin with just its tray icon (about 0.1% CPU). Memory is private memory. Sizes leave out MSI Center's Microsoft Store app and the .NET runtime Wattkin uses.</sub>
 
 <p align="center">
-  <img src="docs/images/flyout-dark.png" alt="Wattkin flyout, dark theme" width="380">
-  &nbsp;
-  <img src="docs/images/flyout-light.png" alt="Wattkin flyout, light theme" width="380">
+  <img src="docs/images/hero.png" alt="Wattkin's flyout in the dark and light theme, and its Settings window">
 </p>
 
 The tray icon *is* the reading:

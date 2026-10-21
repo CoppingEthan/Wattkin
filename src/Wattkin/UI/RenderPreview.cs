@@ -103,11 +103,15 @@ internal static class RenderPreview
         var app = App.Current;
 
         // Shown windows ask for live data; clocks, disk rates and the busiest apps need a few samples.
+        // Never on screen: Windows first puts a new window near the top-left corner, and the widget then
+        // moves itself to its saved place (a blank widget flashed up there during every render).
         var flyout = new FlyoutWindow { ShowActivated = false, Left = -6000, Top = 0 };
-        var widget = new WidgetWindow { ShowActivated = false };
+        var widget = new WidgetWindow { ShowActivated = false, Left = -6000, Top = 0 };
+        WindowEffects.KeepOffScreen(flyout);
+        WindowEffects.KeepOffScreen(widget);
+        _ = app.Screen.RefreshAsync(); // the screen slider at the real brightness, not "Normal"
         flyout.Show();
         widget.Show();
-        widget.Left = -6000;
         Wait(TimeSpan.FromSeconds(6));
         if (app.Monitor.Latest is { } latest)
         {
@@ -121,6 +125,7 @@ internal static class RenderPreview
         widget.Close();
 
         var settings = new SettingsWindow { ShowActivated = false, WindowStartupLocation = WindowStartupLocation.Manual, Left = -6000, Top = 0 };
+        WindowEffects.KeepOffScreen(settings);
         settings.Show();
 
         // Give the capacity history (powercfg battery report, a few seconds) time to load.

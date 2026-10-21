@@ -325,8 +325,11 @@ public sealed class ScreenBrightness : IDisposable
         }
     }
 
-    /// <summary>Reads the backlight again, in case a change was missed. A set or event meanwhile wins.</summary>
-    public Task RefreshAsync() => !_controls ? Task.CompletedTask : Task.Run(() =>
+    /// <summary>
+    /// Reads the backlight again, in case a change was missed. A set or event meanwhile wins. Only reads,
+    /// so copies that don't control the screen (screenshots) use it too, to show the real brightness.
+    /// </summary>
+    public Task RefreshAsync() => Task.Run(() =>
     {
         int version;
         lock (_gate)

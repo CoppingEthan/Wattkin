@@ -83,6 +83,17 @@ internal static class WindowEffects
             }, System.Windows.Threading.DispatcherPriority.ContextIdle);
         }
     }
+
+    /// <summary>
+    /// Hides a window from the screen for good while it's still "shown" to WPF, which lays it out and
+    /// draws it as usual: for windows only ever rendered to images (--render). Call before Show.
+    /// </summary>
+    public static void KeepOffScreen(Window window)
+    {
+        var hwnd = new System.Windows.Interop.WindowInteropHelper(window).EnsureHandle();
+        var cloak = 1;
+        DwmSetWindowAttribute(hwnd, DWMWA_CLOAK, ref cloak, sizeof(int));
+    }
 }
 
 /// <summary>A custom-drawn element that redraws when the light/dark palette changes.</summary>
