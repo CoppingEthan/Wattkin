@@ -21,7 +21,8 @@ $images = Join-Path $PSScriptRoot '..\docs\images'
 New-Item -ItemType Directory -Force $images | Out-Null
 $wanted = 'flyout-dark', 'flyout-light', 'widget-dark', 'tray-dark', 'tray-light',
     'settings-simple-dark', 'settings-simple-light',
-    'settings-expert-battery-light', 'settings-expert-profiles-dark', 'settings-expert-graphics-dark', 'settings-expert-system-light', 'settings-expert-fans-dark', 'settings-expert-debug-dark'
+    'settings-expert-battery-light', 'settings-expert-profiles-dark', 'settings-expert-graphics-dark', 'settings-expert-system-light', 'settings-expert-fans-dark', 'settings-expert-debug-dark',
+    'settings-expert-battery-tall-light'
 foreach ($name in $wanted) {
     Copy-Item (Join-Path $raw "$name.png") (Join-Path $images "$name.png") -Force
 }

@@ -1,12 +1,14 @@
 # Builds the README's top image, docs\images\hero.png, from the rendered screenshots: the flyout in
-# dark and light and the Settings window side by side, centred on a 16:9 canvas. The background is
-# transparent, so it sits on GitHub's light and dark themes alike. Run by screenshots.ps1, or alone:
+# dark and light and the Settings window side by side, all the same height, centred on a 16:9 canvas.
+# The background is transparent, so it sits on GitHub's light and dark themes alike. Run by
+# screenshots.ps1, or alone:
 #   .\tools\hero.ps1
 param([string]$Images = (Join-Path $PSScriptRoot '..\docs\images'))
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
-$names = 'flyout-dark', 'flyout-light', 'settings-expert-battery-light'
+# The Settings window is rendered as tall as the flyout for this (more of the page, not stretched).
+$names = 'flyout-dark', 'flyout-light', 'settings-expert-battery-tall-light'
 $gap = 64     # between screenshots
 $pad = 96     # at least this much around them
 $radius = 12  # Windows 11's rounded corners at 150%
@@ -25,6 +27,22 @@ function RoundedRect([float]$x, [float]$y, [float]$w, [float]$h, [float]$r) {
 
 $shots = @(foreach ($name in $names) { [System.Drawing.Image]::FromFile((Resolve-Path (Join-Path $Images "$name.png")).Path) })
 try {
+    # All the same height: one a few pixels off (rounding) is scaled to the tallest.
+    $tallest = ($shots | Measure-Object -Property Height -Maximum).Maximum
+    for ($n = 0; $n -lt $shots.Count; $n++) {
+        $shot = $shots[$n]
+        if ($shot.Height -ne $tallest) {
+            $scaled = New-Object System.Drawing.Bitmap([int][Math]::Round($shot.Width * $tallest / $shot.Height), $tallest)
+            $sg = [System.Drawing.Graphics]::FromImage($scaled)
+            $sg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $sg.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+            $sg.DrawImage($shot, 0, 0, $scaled.Width, $scaled.Height)
+            $sg.Dispose()
+            $shot.Dispose()
+            $shots[$n] = $scaled
+        }
+    }
+
     $contentWidth = ($shots | Measure-Object -Property Width -Sum).Sum + $gap * ($shots.Count - 1)
     $contentHeight = ($shots | Measure-Object -Property Height -Maximum).Maximum
 

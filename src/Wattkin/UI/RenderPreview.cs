@@ -121,6 +121,7 @@ internal static class RenderPreview
 
         Save(flyout, Path.Combine(folder, $"flyout-{theme}.png"));
         Save(widget, Path.Combine(folder, $"widget-{theme}.png"));
+        var flyoutHeight = ((FrameworkElement)flyout.Content).ActualHeight;
         flyout.Close();
         widget.Close();
 
@@ -168,6 +169,17 @@ internal static class RenderPreview
 
             Save(settings, Path.Combine(folder, $"settings-expert-{tab.Tag}-{theme}.png"));
         }
+
+        // For the README's top image: the battery tab as tall as the flyout beside it, so they line up.
+        // The window is made taller (more of the page shows), nothing is stretched.
+        tabs.SelectedItem = tabs.Items.Cast<TabItem>().First(t => t.Tag is "battery");
+        Pump();
+        var page = (FrameworkElement)settings.Content;
+        settings.Height = settings.ActualHeight + flyoutHeight - page.ActualHeight;
+        Pump();
+        settings.UpdateLayout();
+        Save(settings, Path.Combine(folder, $"settings-expert-battery-tall-{theme}.png"));
+        settings.Height = height;
 
         settings.Close();
     }
