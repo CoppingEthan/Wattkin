@@ -5,8 +5,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for trying Wattkin! A diagnostics report tells us almost everything: it lists your laptop's firmware and controller settings, and it only reads from the hardware.
-        To get one: click **Save a diagnostics report** on the flyout's yellow banner, or go to **Settings › Expert › Debug › Save diagnostics report**.
+        Thanks for trying Wattkin! A report tells us almost everything: it lists your laptop's firmware and controller settings, and it only reads from the hardware.
+        The easiest way: click **Help support this laptop** (on the flyout's yellow banner, in **Settings › Expert › General**, or **Report this laptop on GitHub** in **Settings › Expert › Debug**). It saves the report on your desktop and fills this form in for you; just drag the report into the last box.
   - type: input
     id: model
     attributes:

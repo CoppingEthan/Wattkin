@@ -113,7 +113,7 @@ public sealed class EmbeddedController : IEcSensorSource
             Reason = acpi.WmiMajor switch
             {
                 < 2 => $"This laptop uses MSI's older firmware interface (version {acpi.WmiMajor}.{acpi.WmiMinor}), which Wattkin can't control yet. Monitoring works.",
-                > 2 => $"This laptop uses a newer version of MSI's firmware interface ({acpi.WmiMajor}.{acpi.WmiMinor}) that Wattkin hasn't been tested with, so it only monitors for now. A diagnostics report (Settings › Debug) would help add it.",
+                > 2 => $"This laptop uses a newer version of MSI's firmware interface ({acpi.WmiMajor}.{acpi.WmiMinor}) that Wattkin hasn't been tested with, so it only monitors for now. A report from \"Help support this laptop\" would help add it.",
                 _ => candidate is null ? "No register map for this firmware." : $"The registers didn't look like {candidate.Source} ({why}), so Wattkin stays read-only.",
             };
             Log.Warn($"EC {acpi.EcVersion}: controls disabled. {Reason}");

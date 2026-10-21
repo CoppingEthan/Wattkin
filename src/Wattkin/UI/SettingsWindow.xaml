@@ -371,6 +371,8 @@
                         <StackPanel>
                             <TextBlock Text="About" Style="{StaticResource Lc.Section}" />
                             <TextBlock x:Name="SupportText" Style="{StaticResource Lc.Value}" TextWrapping="Wrap" Margin="0,0,0,6" />
+                            <Button x:Name="SupportButton" Content="Help support this laptop" Click="OnSupportLaptop" HorizontalAlignment="Left" Margin="0,0,0,8" Visibility="Collapsed"
+                                    ToolTip="Saves a report on your desktop and opens GitHub's form for posting it. Only reads the hardware; nothing is sent unless you post it." />
                             <TextBlock x:Name="AboutText" Style="{StaticResource Lc.Hint}" />
                         </StackPanel>
                     </Border>
@@ -430,6 +432,7 @@
                             <TextBlock Style="{StaticResource Lc.Hint}" Margin="0,0,0,8" Text="A text report of the firmware, sensors and every controller register, for a bug report. It only reads, and doesn't wake the RTX. Takes about 15 seconds." />
                             <StackPanel Orientation="Horizontal">
                                 <Button x:Name="DiagnosticsButton" Content="Save diagnostics report" Click="OnDiagnostics" Margin="0,0,8,0" />
+                                <Button Content="Report this laptop on GitHub" Click="OnSupportLaptop" Margin="0,0,8,0" />
                                 <Button Content="Open log" Click="OnOpenLog" />
                             </StackPanel>
                         </StackPanel>

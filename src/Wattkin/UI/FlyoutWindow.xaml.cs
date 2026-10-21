@@ -573,7 +573,7 @@ public partial class FlyoutWindow : Window
         {
             BannerAction.Elevate => "Restart as administrator",
             BannerAction.ShowMsiHelp => "Show me how",
-            BannerAction.SaveReport => "Save a diagnostics report",
+            BannerAction.SaveReport => "Help support this laptop",
             _ => null,
         };
         BannerButton.Visibility = _bannerAction == BannerAction.None ? Visibility.Collapsed : Visibility.Visible;
@@ -590,28 +590,10 @@ public partial class FlyoutWindow : Window
                 App.Current.OpenSettings("general");
                 break;
             case BannerAction.SaveReport:
-                BannerButton.IsEnabled = false;
-                BannerButton.Content = "Reading the hardware…";
-                await SaveReportToDesktopAsync();
-                BannerButton.IsEnabled = true;
-                BannerButton.Content = "Save a diagnostics report";
+                // The question would take the focus and hide the flyout anyway: out of the way first.
+                HideFlyout();
+                await LaptopReport.OfferAsync(null, BannerButton);
                 break;
-        }
-    }
-
-    /// <summary>Saves the read-only report on the desktop and shows it in Explorer, ready to attach to an issue.</summary>
-    private static async Task SaveReportToDesktopAsync()
-    {
-        var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), $"Wattkin-diagnostics-{DateTime.Now:yyyyMMdd-HHmm}.txt");
-        try
-        {
-            await Task.Run(() => Diagnostics.Run(path));
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            Log.Error("Diagnostics failed", ex);
-            MessageBox.Show(ex.Message, "Diagnostics", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 

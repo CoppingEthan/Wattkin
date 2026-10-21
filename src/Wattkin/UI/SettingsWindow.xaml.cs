@@ -718,10 +718,15 @@ public partial class SettingsWindow : Window
             {
                 null => Elevation.IsElevated ? "Reading the laptop's firmware…" : "Hardware support: needs administrator rights to check.",
                 { Support: EcSupport.Verified } => $"Hardware support: verified on this firmware ({caps.MapSource}).",
-                { Support: EcSupport.Community } => $"Hardware support: msi-ec register map ({caps.MapSource}), sanity-checked on this laptop at startup. If anything misbehaves, please report it with a diagnostics report.",
-                { Support: EcSupport.Standard } => "Hardware support: MSI's standard layout (the registers MSI Center uses on all recent MSI laptops), sanity-checked on this laptop at startup. Please report how it works with a diagnostics report.",
+                { Support: EcSupport.Community } => $"Hardware support: msi-ec register map ({caps.MapSource}), sanity-checked on this laptop at startup. Telling us how it works helps confirm it.",
+                { Support: EcSupport.Standard } => "Hardware support: MSI's standard layout (the registers MSI Center uses on all recent MSI laptops), sanity-checked on this laptop at startup. Telling us how it works helps confirm it.",
                 _ => state.Problem ?? "Hardware support: monitoring only on this firmware.",
             };
+
+            // Not verified on this firmware yet: a report is what adds it.
+            SupportButton.Visibility = !Elevation.IsElevated || caps is { Support: EcSupport.Verified } || (caps is null && state.Problem is null)
+                ? Visibility.Collapsed
+                : Visibility.Visible;
             if (state.Gpu is { } gpu)
             {
                 FirmwareMode.Text = $"Current: {Describe(gpu.Current)}" + (gpu.SwitchPending ? $" · switching to {Describe(gpu.Requested)} at the next full shutdown" : "");
@@ -1659,6 +1664,8 @@ public partial class SettingsWindow : Window
             DiagnosticsButton.Content = "Save diagnostics report";
         }
     }
+
+    private async void OnSupportLaptop(object sender, RoutedEventArgs e) => await LaptopReport.OfferAsync(this, (Button)sender);
 
     private static void OpenFolder(string path)
     {

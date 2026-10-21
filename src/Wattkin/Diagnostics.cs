@@ -21,6 +21,12 @@ public static class Diagnostics
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Wattkin", "diagnostics.txt")
             : Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, Build(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+    }
+
+    /// <summary>The report's text (about 15 s: it samples the sensors). Also the second half of a <see cref="LaptopReport"/>.</summary>
+    public static string Build()
+    {
         var sb = new StringBuilder();
         void Line(string text) => sb.AppendLine(text);
         void Try(string label, Action action)
@@ -152,6 +158,6 @@ public static class Diagnostics
             Line("EC / firmware: skipped (needs administrator).");
         }
 
-        File.WriteAllText(path, sb.ToString(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+        return sb.ToString();
     }
 }
