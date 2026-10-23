@@ -24,6 +24,13 @@ public partial class SimpleSettings : UserControl
     public SimpleSettings()
     {
         InitializeComponent();
+        if (DataFolders.Portable)
+        {
+            // Only the installed copy may start at logon as administrator, and only it updates itself.
+            StartToggle.IsEnabled = false;
+            StartText.Text = "Only the installed version can (it starts as administrator).";
+            UpdateTitle.Text = "Check for updates";
+        }
 
         // A steady 48 px per wheel notch (Windows' usual three lines), not a whole group at a time.
         Scroller.PreviewMouseWheel += (_, e) =>
@@ -325,7 +332,7 @@ public partial class SimpleSettings : UserControl
 
     public void RefreshUpdates(UpdateState? state)
     {
-        UpdateText.Text = state is null ? "Checks GitHub once a day; updates are signed." : Updater.CanInstall ? state.Message : "Updates install into the copy in Program Files.";
+        UpdateText.Text = state is null ? "Checks GitHub once a day; updates are signed." : Updater.CanInstall || DataFolders.Portable ? state.Message : "Updates install into the copy in Program Files.";
     }
 
     // ---- handlers -----------------------------------------------------------------------------

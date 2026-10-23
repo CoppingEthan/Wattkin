@@ -25,7 +25,8 @@ internal static class Installation
 
     public static bool IsInstalled => File.Exists(Exe);
 
-    public static bool RunningInstalled => string.Equals(Environment.ProcessPath, Exe, StringComparison.OrdinalIgnoreCase);
+    /// <summary>Never the portable build, even unzipped into Program Files\Wattkin: it mustn't update itself into the exe that needs .NET.</summary>
+    public static bool RunningInstalled => !DataFolders.Portable && string.Equals(Environment.ProcessPath, Exe, StringComparison.OrdinalIgnoreCase);
 
     public static Version? InstalledVersion =>
         IsInstalled && Releases.TryParseVersion(FileVersionInfo.GetVersionInfo(Exe).ProductVersion, out var v) ? v : null;
@@ -81,24 +82,7 @@ internal static class Installation
     public static void Uninstall(bool removeData)
     {
         StopRunningCopy();
-        Step("restore Windows settings", () =>
-        {
-            new SettingsStore().Update(WindowsPower.RestoreOriginals);
-            global::Wattkin.Hardware.DiscreteGpu.Enable();
-        });
-        Step("laptop controller", ResetHardware);
-        Step("WMI classes", global::Wattkin.Hardware.WmiSchema.Remove); // after the controller, which needs them
-        Step("screen", () =>
-        {
-            // The running copy put the normal picture back as it exited; only the range setting is left.
-            // The flag goes too, so a reinstall's uninstall doesn't remove a value someone else set since.
-            var store = new SettingsStore();
-            if (store.Current.ScreenGammaRangeSet)
-            {
-                GammaRamp.RemoveFullRange();
-                store.Update(s => s.ScreenGammaRangeSet = false);
-            }
-        });
+        PutBack();
         Step("logon task", () => StartupTask.Disable());
         Step("shortcuts", () =>
         {
@@ -143,6 +127,33 @@ internal static class Installation
             else if (Directory.Exists(Folder))
             {
                 Directory.Delete(Folder, recursive: true);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Elevated, with no Wattkin running. What Wattkin changed outside its own files: Windows' power settings
+    /// and a disabled NVIDIA GPU, the charge limit and the fans, its WMI classes and the screen's gamma range.
+    /// Uninstalling does this; so does the portable copy's "Remove from this PC".
+    /// </summary>
+    public static void PutBack()
+    {
+        Step("restore Windows settings", () =>
+        {
+            new SettingsStore().Update(WindowsPower.RestoreOriginals);
+            global::Wattkin.Hardware.DiscreteGpu.Enable();
+        });
+        Step("laptop controller", ResetHardware);
+        Step("WMI classes", global::Wattkin.Hardware.WmiSchema.Remove); // after the controller, which needs them
+        Step("screen", () =>
+        {
+            // The running copy put the normal picture back as it exited; only the range setting is left.
+            // The flag goes too, so a reinstall's uninstall doesn't remove a value someone else set since.
+            var store = new SettingsStore();
+            if (store.Current.ScreenGammaRangeSet)
+            {
+                GammaRamp.RemoveFullRange();
+                store.Update(s => s.ScreenGammaRangeSet = false);
             }
         });
     }

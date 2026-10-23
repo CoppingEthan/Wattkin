@@ -41,6 +41,57 @@ public class PowerModelTests
         Assert.NotNull(p.UnpluggedRuntimeEstimate);
     }
 
+    /// <summary>A model that has learned 5 W for the rest of the system (8 W on battery with the CPU at 3 W).</summary>
+    private static PowerModel Learned()
+    {
+        var model = new PowerModel();
+        for (var i = 0; i < 120; i++)
+        {
+            model.Update(T0.AddSeconds(i), OnBattery(40, 8), 60_000, 3, 80, dgpuActive: false);
+        }
+
+        return model;
+    }
+
+    [Fact]
+    public void WhileChargingTheChargerGivesTheLaptopsDrawPlusTheBatterysShare()
+    {
+        var p = Learned().Update(T0.AddSeconds(200), OnCharger(40, 30), 60_000, 4, 80, dgpuActive: false);
+        Assert.Equal(9, p.SystemWatts!.Value, 1);
+        Assert.Equal(39, p.ChargerWatts!.Value, 1);
+    }
+
+    [Fact]
+    public void AtTheLimitTheChargerOnlyRunsTheLaptop()
+    {
+        var p = Learned().Update(T0.AddSeconds(200), OnCharger(48, 0), 60_000, 4, 80, dgpuActive: false);
+        Assert.Equal(9, p.ChargerWatts!.Value, 1);
+    }
+
+    [Fact]
+    public void RunningFromTheBatteryWhilePluggedInTheChargerGivesNothing()
+    {
+        var drain = new BatteryReading(BatteryPowerState.OnLine | BatteryPowerState.Discharging, 50_000, 16000, -10_000);
+        var p = Learned().Update(T0.AddSeconds(200), drain, 60_000, 4, 80, dgpuActive: false);
+        Assert.Equal(0, p.ChargerWatts!.Value, 1);
+    }
+
+    [Fact]
+    public void NoChargerNumberFromTheCpuAloneOrOnBattery()
+    {
+        Assert.Null(new PowerModel().Update(T0, OnCharger(40, 30), 60_000, 4, 80, dgpuActive: false).ChargerWatts);
+        Assert.Null(Learned().Update(T0.AddSeconds(200), OnBattery(40, 8), 60_000, 3, 80, dgpuActive: false).ChargerWatts);
+    }
+
+    [Fact]
+    public void AWorkingRtxAddsItsOwnReadingToTheChargerNumberOnly()
+    {
+        // Only read while a window is open: in the laptop's estimate (tray, averages) it would come and go.
+        var p = Learned().Update(T0.AddSeconds(200), OnCharger(40, 30), 60_000, 4, 80, dgpuActive: true, dgpuWatts: 60);
+        Assert.Equal(9, p.SystemWatts!.Value, 1);
+        Assert.Equal(99, p.ChargerWatts!.Value, 1);
+    }
+
     [Fact]
     public void DoesNotLearnWhileTheDgpuIsActive()
     {

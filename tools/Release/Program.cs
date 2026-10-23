@@ -2,6 +2,7 @@
 //   keygen                         make the signing key (once) and print the public key for Releases.PublicKey
 //   sign <exe> <version>           write <exe>.sig, and check it against the key built into the app
 //   publish <version> <exe> [notes-file]   create the GitHub release v<version> and upload Wattkin.exe + .sig
+//                                          (and Wattkin-portable.zip when it's next to the exe)
 // The private key lives in %APPDATA%\Wattkin Release\release-key.pem, never in the repository.
 using System.Diagnostics;
 using System.Net.Http.Headers;
@@ -23,7 +24,7 @@ try
         _ => Usage(),
     };
 }
-catch (Exception ex) when (ex is IOException or CryptographicException or HttpRequestException or InvalidOperationException)
+catch (Exception ex) when (ex is IOException or CryptographicException or HttpRequestException or InvalidOperationException or TaskCanceledException)
 {
     Console.Error.WriteLine($"error: {ex.Message}");
     return 1;
@@ -87,7 +88,19 @@ async Task<int> Publish(string versionText, string exePath, string notes)
         throw new InvalidOperationException("The exe and its .sig don't match. Sign it first.");
     }
 
-    using var http = new HttpClient();
+    // The portable zip from the same build, when there is one (build.ps1 makes it next to the exe).
+    var portablePath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(exePath))!, Releases.PortableAsset);
+    var assets = new List<(string Name, byte[] Bytes, string Type)>
+    {
+        (Releases.ExeAsset, exe, "application/octet-stream"),
+        (Releases.SignatureAsset, Encoding.ASCII.GetBytes(signature), "application/octet-stream"),
+    };
+    if (File.Exists(portablePath))
+    {
+        assets.Add((Releases.PortableAsset, File.ReadAllBytes(portablePath), "application/zip"));
+    }
+
+    using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(15) }; // the portable zip is about 60 MB
     http.DefaultRequestHeaders.UserAgent.ParseAdd("wattkin-release");
     http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
     http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", GitHubToken());
@@ -103,10 +116,10 @@ async Task<int> Publish(string versionText, string exePath, string notes)
 
     using var doc = JsonDocument.Parse(createdJson);
     var uploadUrl = doc.RootElement.GetProperty("upload_url").GetString()!.Split('{')[0];
-    foreach (var (name, bytes) in new[] { (Releases.ExeAsset, exe), (Releases.SignatureAsset, Encoding.ASCII.GetBytes(signature)) })
+    foreach (var (name, bytes, type) in assets)
     {
         var content = new ByteArrayContent(bytes);
-        content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        content.Headers.ContentType = new MediaTypeHeaderValue(type);
         using var uploaded = await http.PostAsync($"{uploadUrl}?name={Uri.EscapeDataString(name)}", content);
         if (!uploaded.IsSuccessStatusCode)
         {

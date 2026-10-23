@@ -74,10 +74,19 @@ public partial class App : Application
         _previewOnly = renderFolder is not null || measureSeconds is not null;
 
         // Started from a download (or the build folder): install or update the copy in Program Files.
-        // --portable runs this copy as it is (development).
-        if (!_previewOnly && !Installation.RunningInstalled && !e.Args.Contains("--portable"))
+        // The portable build runs where it is; --portable runs this copy as it is (development).
+        if (!_previewOnly && !Installation.RunningInstalled && !DataFolders.Portable && !e.Args.Contains("--portable"))
         {
             OfferInstall();
+            Shutdown();
+            return;
+        }
+
+        // The portable build has no logon task to start it as administrator, so it asks (UAC) each time it
+        // starts; declined, it monitors only. A copy already running is shown instead, without asking.
+        if (!_previewOnly && DataFolders.Portable && !Elevation.IsElevated && !e.Args.Contains("--elevated")
+            && (SingleInstance.RequestShow(InstanceName) || Elevation.RestartElevated()))
+        {
             Shutdown();
             return;
         }
@@ -190,6 +199,16 @@ public partial class App : Application
 
         if (args.Contains("--install"))
         {
+            if (DataFolders.Portable)
+            {
+                if (!args.Contains("--quiet"))
+                {
+                    MessageBox.Show("This is the portable version, which runs from its folder. To install Wattkin, download Wattkin.exe from GitHub.", "Wattkin", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+
+                return 2;
+            }
+
             if (!Elevation.IsElevated)
             {
                 return Elevation.RunElevatedAndWait(string.Join(' ', args)) ?? ErrorCancelled;
@@ -239,6 +258,35 @@ public partial class App : Application
 
             Installation.StopRunningCopy();
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Installation.Exe, "--elevated --startup --updated") { UseShellExecute = false });
+            return 0;
+        }
+
+        if (args.Contains("--put-back"))
+        {
+            // The portable copy's "Remove from this PC": once the copy that asked (--put-back <its process id>)
+            // has released the hardware and exited, put back what Wattkin changed outside its folder.
+            if (!DataFolders.Portable || !Elevation.IsElevated || !int.TryParse(Arg(args, "--put-back"), out var asker))
+            {
+                return 5;
+            }
+
+            try
+            {
+                using var process = System.Diagnostics.Process.GetProcessById(asker);
+                if (string.Equals(process.MainModule?.FileName, Environment.ProcessPath, StringComparison.OrdinalIgnoreCase) && !process.WaitForExit(30_000))
+                {
+                    MessageBox.Show("Wattkin didn't close, so nothing was changed. Try again.", "Wattkin", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return 6;
+                }
+            }
+            catch (ArgumentException)
+            {
+                // already exited
+            }
+
+            Installation.PutBack();
+            Log.Info("Portable copy: put back what Wattkin changed on this PC.");
+            MessageBox.Show("Done. The battery charges to 100% again, the fans are back on automatic and Windows' power settings are as they were. You can delete the Wattkin folder now.", "Wattkin", MessageBoxButton.OK, MessageBoxImage.Information);
             return 0;
         }
 
@@ -597,6 +645,27 @@ public partial class App : Application
         {
             Log.Error("Restart failed", ex);
         }
+    }
+
+    /// <summary>
+    /// The portable copy's "Remove from this PC" (elevated). Like uninstalling, the putting back is done by
+    /// another process once this one has released the hardware and exited (--put-back), so nothing this
+    /// one still had in flight can change a setting back afterwards.
+    /// </summary>
+    public void RemoveFromThisPc()
+    {
+        try
+        {
+            // Started directly, not through the shell: it gets this copy's administrator rights.
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!, $"--put-back {Environment.ProcessId}") { UseShellExecute = false });
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            Log.Error("Starting the put-back failed", ex);
+            return;
+        }
+
+        ExitApp();
     }
 
     public void ExitApp()

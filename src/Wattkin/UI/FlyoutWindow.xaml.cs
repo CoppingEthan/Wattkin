@@ -159,9 +159,11 @@ public partial class FlyoutWindow : Window
         ModelText.Text = info?.Model.Replace("MSI ", "") ?? "";
 
         WattsText.Text = Fmt.WattsNumber(p.WattsNow);
+        var showCharger = app.Store.Current.ShowChargerWatts;
         WattsCaption.Text = p.Source switch
         {
             PowerSource.BatteryMeasured => "On battery",
+            PowerSource.AcEstimated when showCharger && p.ChargerWatts is { } charger => $"On the charger · ≈{Fmt.Watts(charger)} in",
             PowerSource.AcEstimated => "On the charger · estimated",
             PowerSource.AcCpuOnly => "On the charger · CPU only",
             _ => "",
@@ -256,6 +258,16 @@ public partial class FlyoutWindow : Window
             {
                 lines.Add($"Everything else (screen, SSD, Wi-Fi, RTX…) {Fmt.Watts(Math.Max(0, sys - pkg))}");
             }
+        }
+
+        if (app.Store.Current.ShowChargerWatts && p.ChargerWatts is { } charger)
+        {
+            lines.Add(p.BatteryRateWatts switch
+            {
+                > 0 and var charging when p.Charging => $"The charger is giving about {Fmt.Watts(charger)}: the laptop's {Fmt.Watts(charger - charging)} plus {Fmt.Watts(charging)} into the battery (beta)",
+                < 0 and var discharging => $"The charger is giving about {Fmt.Watts(charger)}, and the battery {Fmt.Watts(-discharging)} (beta)",
+                _ => $"The charger is giving about {Fmt.Watts(charger)}, all of it running the laptop (beta)",
+            });
         }
 
         if (p.AverageWatts is { } avg)

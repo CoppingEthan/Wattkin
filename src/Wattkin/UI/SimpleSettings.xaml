@@ -167,7 +167,7 @@
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                         <StackPanel VerticalAlignment="Center">
                             <TextBlock Text="Start with Windows" Style="{StaticResource Lc.RowTitle}" />
-                            <TextBlock Text="Runs at sign-in, with no UAC prompt." Style="{StaticResource Lc.RowText}" />
+                            <TextBlock x:Name="StartText" Text="Runs at sign-in, with no UAC prompt." Style="{StaticResource Lc.RowText}" />
                         </StackPanel>
                         <CheckBox x:Name="StartToggle" Grid.Column="1" Style="{StaticResource Lc.Toggle}" Click="OnStartWithWindows" />
                     </Grid>
@@ -193,7 +193,7 @@
                     <Grid Style="{StaticResource Lc.Row}">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                         <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Update automatically" Style="{StaticResource Lc.RowTitle}" />
+                            <TextBlock x:Name="UpdateTitle" Text="Update automatically" Style="{StaticResource Lc.RowTitle}" />
                             <TextBlock x:Name="UpdateText" Style="{StaticResource Lc.RowText}" />
                         </StackPanel>
                         <CheckBox x:Name="UpdateToggle" Grid.Column="1" Style="{StaticResource Lc.Toggle}" Click="OnUpdates" />

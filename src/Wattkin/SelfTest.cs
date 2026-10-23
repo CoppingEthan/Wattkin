@@ -58,7 +58,7 @@ public static class SelfTest
             _ => "read",
         };
         path = string.IsNullOrEmpty(path)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Wattkin", $"selftest-{name}.txt")
+            ? Path.Combine(DataFolders.Local, $"selftest-{name}.txt")
             : path;
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
 

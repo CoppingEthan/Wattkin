@@ -17,6 +17,8 @@
     <Description>Lightweight control center for MSI laptops</Description>
     <!-- Updates come from CoppingEthan/Wattkin's signed releases. A fork that publishes its own builds sets this to false, so they aren't replaced. -->
     <WattkinUpdates Condition="'$(WattkinUpdates)' == ''">true</WattkinUpdates>
+    <!-- The portable build (build.ps1 sets it): files next to the exe, never installed (DataFolders). -->
+    <WattkinPortable Condition="'$(WattkinPortable)' == ''">false</WattkinPortable>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <TieredPGO>true</TieredPGO>
     <!-- WPF reads PerMonitorV2 from the manifest; the WinForms analyzer only covers the NotifyIcon. -->
@@ -49,6 +51,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Wattkin.Tests" />
     <AssemblyMetadata Include="WattkinUpdates" Value="$(WattkinUpdates)" />
+    <AssemblyMetadata Include="WattkinPortable" Value="$(WattkinPortable)" />
   </ItemGroup>
 
 </Project>

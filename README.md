@@ -36,13 +36,19 @@ Wattkin installs itself, starts with Windows and keeps itself up to date. It nee
 
 To uninstall, go to **Settings › Apps › Installed apps › Wattkin**. Your Windows power settings are put back and the battery charges to 100% again.
 
+### Portable version
+
+**Wattkin-portable.zip**, on the same release page, runs from whatever folder you unzip it to and needs nothing else installed. It brings its own .NET, which makes it about 150 MB unzipped. Its settings, logs and battery history stay in a `data` folder next to it. It asks for administrator rights each time it starts, because it can't start with Windows, and it doesn't update itself. Settings tells you when there's a new version.
+
+A few things can't live in a folder: the laptop keeps the charge limit itself, profiles change Windows' power settings, and Windows needs Wattkin's description of MSI's firmware interface. Before deleting the folder, use **Remove from this PC** (Expert settings › General) to put them back.
+
 ### MSI Center
 
 You don't need MSI Center, and you never need to install it. If it's already on your laptop, uninstall it once Wattkin is set up: **MSI Center** in **Settings › Apps**, along with **MSI NBFoundation Service** and **MSI Center SDK** if they're listed, then restart. Running both makes them fight over the same settings.
 
 ## Features
 
-- **Watts at a glance** - What the whole laptop is drawing right now, in the tray icon, a flyout and an optional desktop widget, with the battery time left.
+- **Watts at a glance** - What the whole laptop is drawing right now, in the tray icon, a flyout and an optional desktop widget, with the battery time left. On the charger, the flyout can also show what the charger is giving (beta).
 - **Charge limits** - Stop charging anywhere from 10% to 100%, charge to 100% once for a long day away, or bring the battery down to the limit while plugged in.
 - **Battery health** - Capacity, health and history, plus MSI's calibration for when the battery gauge drifts.
 - **Profiles** - CPU power (including MSI's Sport mode where the laptop has it), fans, Windows power mode, turbo, maximum state and frequency, performance or efficiency, refresh rate and keyboard light, each set separately or left as it is. Profiles switch by themselves when you plug in or unplug, or when the battery runs low. On the Prestige 16 Studio, Quiet keeps the fans off until the CPU reaches 60°C.
@@ -87,7 +93,7 @@ If you try Wattkin on another MSI laptop, please [open an issue](https://github.
 
 Wattkin talks to the laptop through the same firmware interface MSI Center uses, so it needs no driver. Windows only knows that interface once it has been described to it. MSI Center does that with a file of its own, while Wattkin brings its own description, so it works on a Windows install that has never had MSI software. It only changes hardware settings on firmware it recognises, and it logs every change.
 
-Nothing leaves your laptop apart from the daily update check. Settings are kept in `%APPDATA%\Wattkin` and logs in `%LOCALAPPDATA%\Wattkin`.
+Nothing leaves your laptop apart from the daily update check. Settings are kept in `%APPDATA%\Wattkin` and logs in `%LOCALAPPDATA%\Wattkin` (the portable version keeps both in its `data` folder).
 
 ## Building from source
 
@@ -96,7 +102,7 @@ You need the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). I
 ```powershell
 git clone https://github.com/CoppingEthan/Wattkin.git
 cd Wattkin
-powershell -ExecutionPolicy Bypass -File .\build.ps1     # runs the tests, then builds .\dist\Wattkin.exe
+powershell -ExecutionPolicy Bypass -File .\build.ps1     # runs the tests, then builds .\dist\Wattkin.exe and Wattkin-portable.zip
 powershell -ExecutionPolicy Bypass -File .\install.ps1   # installs your build
 ```
 

@@ -335,10 +335,15 @@
                             <TextBlock Text="Wattkin" Style="{StaticResource Lc.Section}" />
                             <CheckBox x:Name="StartWithWindows" Content="Start with Windows (as administrator, without a UAC prompt)" Click="OnStartWithWindows" />
                             <CheckBox x:Name="TrayWatts" Content="Show current watts as the tray icon" Click="OnGeneralChanged" />
+                            <CheckBox x:Name="ChargerWattsToggle" Content="Show what the charger is giving in the flyout (beta, estimated)" Click="OnGeneralChanged"
+                                      ToolTip="The laptop's estimated draw plus what goes into the battery, from the barrel plug or USB-C. It's the power going into the laptop; the charger takes about a tenth more from the wall." />
                             <CheckBox x:Name="WidgetToggle" Content="Show the desktop widget" Click="OnWidgetToggle" />
                             <CheckBox x:Name="BatteryLogToggle" Content="Keep a battery log (on battery a line a minute; on the charger only changes)" Click="OnGeneralChanged" />
                             <TextBlock x:Name="ElevationText" Style="{StaticResource Lc.Hint}" Margin="0,6,0,0" />
                             <Button x:Name="ElevateButton" Content="Restart as administrator" Click="OnElevate" HorizontalAlignment="Left" Margin="0,6,0,0" />
+                            <!-- The portable version only: what it changed outside its folder, put back. -->
+                            <Button x:Name="RemovePortableButton" Content="Remove from this PC…" Click="OnRemovePortable" HorizontalAlignment="Left" Margin="0,6,0,0" Visibility="Collapsed"
+                                    ToolTip="Puts back what Wattkin changed outside its folder (charge limit, fans, Windows' power settings and its description of MSI's firmware interface), then closes. Then the folder can be deleted." />
                         </StackPanel>
                     </Border>
                     <Border Style="{StaticResource Lc.Card}">
@@ -350,7 +355,7 @@
                                 <Button x:Name="CheckUpdatesButton" Content="Check now" Click="OnCheckUpdates" Margin="0,0,8,0" />
                                 <Button x:Name="InstallUpdateButton" Content="Install now" Click="OnInstallUpdate" Visibility="Collapsed" />
                             </StackPanel>
-                            <TextBlock Style="{StaticResource Lc.Hint}" Margin="0,8,0,0" Text="Wattkin asks GitHub for its latest release once a day. Updates are signed, and one that doesn't check out is never installed. They install while Wattkin's windows are closed and not during a calibration." />
+                            <TextBlock x:Name="UpdateHint" Style="{StaticResource Lc.Hint}" Margin="0,8,0,0" Text="Wattkin asks GitHub for its latest release once a day. Updates are signed, and one that doesn't check out is never installed. They install while Wattkin's windows are closed and not during a calibration." />
                         </StackPanel>
                     </Border>
                     <!-- Shown in the simple view only while MSI Center is still running. -->

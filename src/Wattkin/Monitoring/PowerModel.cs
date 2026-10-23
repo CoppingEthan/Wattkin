@@ -15,6 +15,11 @@ public enum PowerSource
 /// <param name="SystemWatts">This sample's reading; null when there was none.</param>
 /// <param name="WattsNow">What to display: the latest reading, held for a few seconds across a missed one.</param>
 /// <param name="AverageWatts">The draw behind the time estimates (<see cref="PowerModel"/> explains the averaging).</param>
+/// <param name="ChargerWatts">
+/// On the charger, with the rest of the system learned: what the charger is giving the laptop (its
+/// estimated draw, a working dGPU's own reading and what goes into the battery). Into the laptop, not
+/// from the wall. Null otherwise.
+/// </param>
 public sealed record PowerState(
     PowerSource Source,
     double? SystemWatts,
@@ -30,7 +35,8 @@ public sealed record PowerState(
     TimeSpan? TimeToEmpty,
     TimeSpan? TimeToTarget,
     TimeSpan? UnpluggedRuntimeEstimate,
-    BatterySession? Session);
+    BatterySession? Session,
+    double? ChargerWatts = null);
 
 /// <summary>Since the charger was last unplugged.</summary>
 public sealed record BatterySession(DateTime StartedUtc, TimeSpan Duration, double UsedWh, double? AverageWatts, TimeSpan? ProjectedRemaining);
@@ -81,7 +87,11 @@ public sealed class PowerModel
 
     /// <param name="chargeTargetPercent">Where charging will stop (the charge limit).</param>
     /// <param name="dgpuActive">A powered dGPU draws power RAPL does not see; don't learn from those samples.</param>
-    public PowerState Update(DateTime nowUtc, BatteryReading? battery, double? fullMWh, double? cpuPackageWatts, int chargeTargetPercent, bool dgpuActive)
+    /// <param name="dgpuWatts">
+    /// The dGPU's own reading while it's working and a window is open, else null. Only the charger number
+    /// adds it: in the system estimate it would come and go with the windows.
+    /// </param>
+    public PowerState Update(DateTime nowUtc, BatteryReading? battery, double? fullMWh, double? cpuPackageWatts, int chargeTargetPercent, bool dgpuActive, double? dgpuWatts = null)
     {
         var dt = _lastSampleUtc is { } last ? Math.Clamp((nowUtc - last).TotalSeconds, 0.05, 60) : 1.0;
         _lastSampleUtc = nowUtc;
@@ -172,6 +182,16 @@ public sealed class PowerModel
             systemWatts = null;
         }
 
+        // The charger gives the laptop's draw plus what goes into the battery. At the limit that's just the
+        // draw; running from the battery while plugged in, the battery covers it. CPU-only would read far too low.
+        // The rest is learned with the dGPU asleep, so a working dGPU's own reading comes on top.
+        double? chargerWatts = null;
+        if (source == PowerSource.AcEstimated && systemWatts is { } estimate)
+        {
+            var laptop = estimate + (dgpuWatts is { } g && double.IsFinite(g) && g > 0 ? g : 0);
+            chargerWatts = !charging && !discharging ? laptop : rateW is { } batteryW ? Math.Max(0, laptop + batteryW) : null;
+        }
+
         if (systemWatts is { } w && double.IsFinite(w))
         {
             _wattsNow = w;
@@ -213,7 +233,7 @@ public sealed class PowerModel
             session = new BatterySession(start, duration, used, average, average is > 0.3 ? Hours(nowWh / average.Value) : null);
         }
 
-        return new PowerState(source, systemWatts, HeldWatts(nowUtc), averageWatts, cpuPackageWatts, rateW, onAc, charging, percent, remainingWh, fullWh, timeToEmpty, timeToTarget, unpluggedEstimate, session);
+        return new PowerState(source, systemWatts, HeldWatts(nowUtc), averageWatts, cpuPackageWatts, rateW, onAc, charging, percent, remainingWh, fullWh, timeToEmpty, timeToTarget, unpluggedEstimate, session, chargerWatts);
     }
 
     /// <summary>The latest reading, kept for a few seconds so one missed sample doesn't blank the display.</summary>

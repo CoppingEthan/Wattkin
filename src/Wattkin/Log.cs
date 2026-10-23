@@ -2,7 +2,7 @@ using System.Text;
 
 namespace Wattkin;
 
-/// <summary>Small append-only log in %LOCALAPPDATA%\Wattkin\logs. Every EC write is recorded here.</summary>
+/// <summary>Small append-only log in %LOCALAPPDATA%\Wattkin\logs (<see cref="DataFolders"/>). Every EC write is recorded here.</summary>
 public static class Log
 {
     private const long MaxBytes = 2 * 1024 * 1024;
@@ -10,7 +10,7 @@ public static class Log
 
     public static string Directory { get; } = Environment.GetEnvironmentVariable("WATTKIN_LOG_DIR") is { Length: > 0 } custom
         ? custom
-        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Wattkin", "logs");
+        : Path.Combine(DataFolders.Local, "logs");
     public static string FilePath { get; } = Path.Combine(Directory, "wattkin.log");
 
     public static void Info(string message) => Write("INFO", message);

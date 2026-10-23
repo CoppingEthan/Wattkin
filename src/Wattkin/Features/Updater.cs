@@ -159,7 +159,8 @@ internal sealed class Updater : IDisposable
             return;
         }
 
-        var when = _store.Current.AutoUpdate ? "It installs by itself when Wattkin's windows are closed." : "";
+        var when = DataFolders.Portable ? "Download the new portable zip from GitHub."
+            : _store.Current.AutoUpdate ? "It installs by itself when Wattkin's windows are closed." : "";
         Set(UpdatePhase.Available, $"Wattkin {release.Version.ToString(3)} is available. {when}".Trim(), release);
     }
 

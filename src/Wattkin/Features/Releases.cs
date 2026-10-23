@@ -19,6 +19,9 @@ public static class Releases
 {
     public const string ExeAsset = "Wattkin.exe";
     public const string SignatureAsset = "Wattkin.exe.sig";
+
+    /// <summary>The portable version (DataFolders in the app). It doesn't update itself, so it isn't read here.</summary>
+    public const string PortableAsset = "Wattkin-portable.zip";
     public const long MaxExeBytes = 64L * 1024 * 1024;
     public const int MaxSignatureBytes = 1024;
 

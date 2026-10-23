@@ -18,7 +18,7 @@ public static class Diagnostics
     {
         // No file given ("--diagnose" alone passes ""), or a bare file name: the default folder / the current one.
         path = string.IsNullOrWhiteSpace(path)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Wattkin", "diagnostics.txt")
+            ? Path.Combine(DataFolders.Local, "diagnostics.txt")
             : Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, Build(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));

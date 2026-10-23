@@ -12,13 +12,16 @@ Write-Host "Stars $($repo.stargazers_count), forks $($repo.forks_count), open is
 Write-Host ''
 
 $total = 0
+$totalPortable = 0
 $releases = Invoke-RestMethod "$api/releases?per_page=100" -Headers $headers
 foreach ($release in $releases) {
     $exe = ($release.assets | Where-Object name -eq 'Wattkin.exe').download_count
     $sig = ($release.assets | Where-Object name -eq 'Wattkin.exe.sig').download_count
+    $zip = [int]($release.assets | Where-Object name -eq 'Wattkin-portable.zip').download_count
     $total += $exe
-    Write-Host ("{0,-8} {1:yyyy-MM-dd}  Wattkin.exe {2,5}   updates (.sig) {3,4}" -f $release.tag_name, [datetime]$release.published_at, $exe, $sig)
+    $totalPortable += $zip
+    Write-Host ("{0,-8} {1:yyyy-MM-dd}  Wattkin.exe {2,5}   updates (.sig) {3,4}   portable {4,4}" -f $release.tag_name, [datetime]$release.published_at, $exe, $sig, $zip)
 }
 
 Write-Host ''
-Write-Host "All releases: $total downloads of Wattkin.exe"
+Write-Host "All releases: $total downloads of Wattkin.exe, $totalPortable of the portable zip"

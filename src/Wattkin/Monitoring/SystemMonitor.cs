@@ -309,8 +309,12 @@ public sealed class SystemMonitor : IDisposable
         }
 
         var cpu = ReadCpu(detail, out var packageWatts);
+
+        // Before the power model: on the charger, the charger number includes the RTX's own reading.
+        IReadOnlyList<GpuLoad> gpus = detail ? WithWatts(ReadGpus(now), cpu.GraphicsWatts, now) : [];
         var reading = _battery.ReadStatus();
-        var power = Power.Update(now, reading, BatteryInfo?.FullChargedCapacityMWh, packageWatts, ChargeTarget(), _dgpu.State == DgpuState.Active);
+        var power = Power.Update(now, reading, BatteryInfo?.FullChargedCapacityMWh, packageWatts, ChargeTarget(), _dgpu.State == DgpuState.Active,
+            gpus.FirstOrDefault(g => g.Adapter.Discrete)?.Watts);
 
         EcSensors? sensors = null;
         double? thermal = null;
@@ -318,7 +322,6 @@ public sealed class SystemMonitor : IDisposable
         IReadOnlyList<AppUsage> top = [];
         var memory = ReadMemory(); // one cheap syscall: always, so a window never opens on an empty RAM row
         IReadOnlyList<DiskStat> disks = [];
-        IReadOnlyList<GpuLoad> gpus = [];
         if (fast)
         {
             try
@@ -333,7 +336,6 @@ public sealed class SystemMonitor : IDisposable
             if (detail)
             {
                 disks = ReadDisks();
-                gpus = WithWatts(ReadGpus(now), cpu.GraphicsWatts, now);
                 if (_thermal?.Read() is { Count: > 0 } zones)
                 {
                     thermal = (zones.Values.Max() / 10.0) - 273.15;

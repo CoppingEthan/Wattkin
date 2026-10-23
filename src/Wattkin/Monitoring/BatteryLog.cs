@@ -20,7 +20,7 @@ public sealed class BatteryLog
     private static readonly TimeSpan FlushInterval = TimeSpan.FromMinutes(15);
     private const string Header = "time,on_ac,charging,percent,remaining_mwh,full_mwh,rate_mw,system_w,cpu_pkg_w,cpu_usage,dgpu";
 
-    private readonly string _directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Wattkin", "battery");
+    private readonly string _directory = Path.Combine(DataFolders.Local, "battery");
     private readonly object _gate = new();
     private readonly List<(string File, string Line)> _pending = [];
     private DateTime _lastLineUtc = DateTime.MinValue;

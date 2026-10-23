@@ -229,6 +229,9 @@ public sealed class AppSettings
 
     // Tray / widget
     public bool TrayShowsWatts { get; set; } = true;
+
+    /// <summary>Beta: the flyout shows what the charger is giving (<see cref="Monitoring.PowerState.ChargerWatts"/>).</summary>
+    public bool ShowChargerWatts { get; set; }
     public bool WidgetEnabled { get; set; }
     public double? WidgetLeft { get; set; }
     public double? WidgetTop { get; set; }
@@ -495,7 +498,7 @@ public sealed class AppSettings
 }
 
 /// <summary>
-/// Loads and saves settings.json in %APPDATA%\Wattkin. Saves are flushed to disk and the previous
+/// Loads and saves settings.json in %APPDATA%\Wattkin (<see cref="DataFolders"/>). Saves are flushed to disk and the previous
 /// file is kept as settings.json.bak, so a power cut mid-save can't lose everything.
 /// </summary>
 public sealed class SettingsStore
@@ -512,7 +515,7 @@ public sealed class SettingsStore
     /// <param name="readOnly">Changes stay in memory: for a copy that doesn't own the settings (screenshots, measurements).</param>
     public SettingsStore(string? directory = null, bool readOnly = false)
     {
-        Directory = directory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Wattkin");
+        Directory = directory ?? DataFolders.Settings;
         FilePath = Path.Combine(Directory, "settings.json");
         ReadOnly = readOnly;
         Current = Load();

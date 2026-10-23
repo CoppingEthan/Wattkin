@@ -23,6 +23,16 @@ public partial class SettingsWindow : Window
     public SettingsWindow()
     {
         InitializeComponent();
+        if (DataFolders.Portable)
+        {
+            // Only the installed copy may start at logon as administrator, and only it updates itself.
+            StartWithWindows.IsEnabled = false;
+            StartWithWindows.Content = "Start with Windows (installed version only: it starts as administrator)";
+            AutoUpdateToggle.Content = "Check for new versions once a day";
+            UpdateHint.Text = "The portable version doesn't update itself: when there's a new version, download the new zip from GitHub.";
+            RemovePortableButton.Visibility = Visibility.Visible;
+        }
+
         FanEditor.Changed += UpdateFanProblem;
         FanTableEditor.Changed += UpdateFanProblem;
         Simple.ExpertRequested += () => SetView(expert: true, save: true);
@@ -121,16 +131,17 @@ public partial class SettingsWindow : Window
         }
 
         var state = updates.State;
+        var portable = DataFolders.Portable; // told about new versions, downloads them itself
         Simple.RefreshUpdates(state);
         UpdateStatus.Text = !Features.Updater.Enabled ? "Updates are turned off in this build."
-            : Features.Updater.CanInstall ? state.Message
+            : Features.Updater.CanInstall || portable ? state.Message
             : "Updates install into the copy in Program Files. Install Wattkin to get them.";
         CheckUpdatesButton.IsEnabled = state.Phase is not (Features.UpdatePhase.Checking or Features.UpdatePhase.Installing);
-        InstallUpdateButton.Visibility = state.Available is not null && Features.Updater.CanInstall ? Visibility.Visible : Visibility.Collapsed;
+        InstallUpdateButton.Visibility = state.Available is not null && (Features.Updater.CanInstall || portable) ? Visibility.Visible : Visibility.Collapsed;
         InstallUpdateButton.IsEnabled = state.Phase != Features.UpdatePhase.Installing;
         if (state.Available is { } release)
         {
-            InstallUpdateButton.Content = $"Install {release.Version.ToString(3)} now";
+            InstallUpdateButton.Content = portable ? $"Download {release.Version.ToString(3)}" : $"Install {release.Version.ToString(3)} now";
         }
     }
 
@@ -152,10 +163,20 @@ public partial class SettingsWindow : Window
 
     private async void OnInstallUpdate(object sender, RoutedEventArgs e)
     {
-        if (App.Current.Updates is { } updates)
+        if (App.Current.Updates is not { } updates)
         {
-            await updates.InstallNowAsync();
+            return;
         }
+
+        if (DataFolders.Portable)
+        {
+            // The latest release's page, where the new portable zip is. A fixed address, not one from GitHub's
+            // answer: this runs as administrator, and the answer isn't trusted (Releases).
+            Process.Start(new ProcessStartInfo("https://github.com/CoppingEthan/Wattkin/releases/latest") { UseShellExecute = true });
+            return;
+        }
+
+        await updates.InstallNowAsync();
     }
 
     /// <summary>Background changes refresh the mirror controls, never an edit in progress.</summary>
@@ -163,7 +184,7 @@ public partial class SettingsWindow : Window
 
     private async Task RefreshStartupTaskAsync()
     {
-        var enabled = await Task.Run(StartupTask.IsEnabled);
+        var enabled = !DataFolders.Portable && await Task.Run(StartupTask.IsEnabled);
         _loading = true;
         StartWithWindows.IsChecked = enabled;
         _loading = false;
@@ -289,7 +310,8 @@ public partial class SettingsWindow : Window
 
         PMaxFreq.Items.Add(Item("Unchanged", null));
         PMaxFreq.Items.Add(Item("No cap", (int?)0));
-        foreach (var mhz in new[] { 1500, 1800, 2000, 2200, 2400, 2600, 2800, 3000, 3300, 3600, 4000, 4400 })
+        // Up to the fastest laptop CPUs' turbo (5.8 GHz): a cap above a CPU's own top speed does nothing.
+        foreach (var mhz in new[] { 1500, 1800, 2000, 2200, 2400, 2600, 2800, 3000, 3300, 3600, 4000, 4400, 4600, 4800, 5000, 5200, 5400, 5600, 5800 })
         {
             PMaxFreq.Items.Add(Item($"{mhz / 1000.0:0.0#} GHz", (int?)mhz));
         }
@@ -441,6 +463,7 @@ public partial class SettingsWindow : Window
             MuteLeds.IsChecked = s.SyncMuteLeds;
 
             TrayWatts.IsChecked = s.TrayShowsWatts;
+            ChargerWattsToggle.IsChecked = s.ShowChargerWatts;
             AutoUpdateToggle.IsChecked = s.AutoUpdate;
             WidgetToggle.IsChecked = App.Current.IsWidgetVisible;
             BatteryLogToggle.IsChecked = s.BatteryLogging;
@@ -1617,6 +1640,7 @@ public partial class SettingsWindow : Window
         App.Current.Store.Update(s =>
         {
             s.TrayShowsWatts = TrayWatts.IsChecked == true;
+            s.ShowChargerWatts = ChargerWattsToggle.IsChecked == true;
             s.BatteryLogging = BatteryLogToggle.IsChecked == true;
         });
     }
@@ -1624,6 +1648,22 @@ public partial class SettingsWindow : Window
     private void OnWidgetToggle(object sender, RoutedEventArgs e) => App.Current.SetWidgetVisible(WidgetToggle.IsChecked == true);
 
     private void OnElevate(object sender, RoutedEventArgs e) => App.Current.RestartElevated();
+
+    private void OnRemovePortable(object sender, RoutedEventArgs e)
+    {
+        if (!Elevation.IsElevated || !App.Current.Hardware.ControlsHardware)
+        {
+            MessageBox.Show(this, "This needs administrator rights. Restart Wattkin as administrator, then try again.", "Wattkin", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (MessageBox.Show(this,
+            "Put back what Wattkin changed on this PC, and close it?\n\nThe battery charges to 100% again, the fans go back to automatic, Windows' power settings are restored, and Wattkin's description of MSI's firmware interface is removed from Windows. Then you can delete the Wattkin folder.",
+            "Remove from this PC", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+        {
+            App.Current.RemoveFromThisPc();
+        }
+    }
 
     private void OnOpenLog(object sender, RoutedEventArgs e)
     {
