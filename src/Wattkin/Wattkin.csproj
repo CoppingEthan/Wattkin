@@ -12,7 +12,7 @@
     <ApplicationIcon>Assets\Wattkin.ico</ApplicationIcon>
     <AssemblyName>Wattkin</AssemblyName>
     <RootNamespace>Wattkin</RootNamespace>
-    <Version>1.2.0</Version>
+    <Version>1.3.0</Version>
     <Product>Wattkin</Product>
     <Description>Lightweight control center for MSI laptops</Description>
     <!-- Updates come from CoppingEthan/Wattkin's signed releases. A fork that publishes its own builds sets this to false, so they aren't replaced. -->
