@@ -290,6 +290,9 @@ public sealed class AppSettings
     /// </summary>
     public bool HardwareAdopted { get; set; }
 
+    /// <summary>A laptop found in performance mode 0xC0, where that may be Sport or turbo, was adopted with the mode left alone (once).</summary>
+    public bool AmbiguousModeAdopted { get; set; }
+
     /// <summary>
     /// Profiles is only ever replaced, never mutated in place, so readers on other threads can
     /// enumerate the list they got without locking.

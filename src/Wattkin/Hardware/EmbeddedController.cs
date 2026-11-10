@@ -168,12 +168,16 @@ public sealed class EmbeddedController : IEcSensorSource
     /// <summary>
     /// One of the map's performance modes, or 0x80 (none chosen yet). On MSI's own layout also 0xC0, MSI's
     /// "Sport" mode: in MSI Center's code it sits between Comfort (0xC1) and Turbo (0xC4), and the
-    /// Katana GF66 12UG (EC 1583EMS1.111) reports it. Not on a family where 0xC0 may be turbo instead
-    /// (<see cref="EcModel.MsiSportUnclear"/>): a laptop found there stays read-only, as before.
+    /// Katana GF66 12UG (EC 1583EMS1.111) reports it. That holds on a family where 0xC0 may be turbo
+    /// instead (<see cref="EcModel.MsiSportUnclear"/>) too: either way it's a mode of this register, so
+    /// the map fits. Until 1.3.0 such a laptop stayed read-only, which locked a Vector 16 HX AI A2XWHG
+    /// (EC 15M3EMS1.113, left in 0xC0 by MSI Center) out of every control. What 0xC0 means there stays
+    /// open: Wattkin never writes it on that family (<see cref="SportValue"/>), and doesn't take it for
+    /// the fastest mode when it first meets the laptop (<see cref="ShiftModeAmbiguous"/>).
     /// </summary>
     public static bool ShiftRegisterLooksRight(EcModel model, byte value) =>
         value == model.ShiftEco || value == model.ShiftBalanced || value == model.ShiftSport || value == model.ShiftTurbo || value == 0x80
-        || (UsesMsiLayout(model) && !model.MsiSportUnclear && value == MsiSport);
+        || (UsesMsiLayout(model) && value == MsiSport);
 
     public const byte MsiSport = 0xC0;
 
@@ -272,6 +276,12 @@ public sealed class EmbeddedController : IEcSensorSource
 
     /// <summary>The performance-mode register holds 0x80: no mode chosen yet (MSI's software never set one). <see cref="GetShiftMode"/> reads null then too.</summary>
     public bool ShiftModeUnset => _model?.ShiftAddress is { } address && _acpi.ReadEc(address) == 0x80;
+
+    /// <summary>
+    /// The register holds 0xC0 on a family where that's MSI's Sport on some laptops and turbo on others
+    /// (<see cref="EcModel.MsiSportUnclear"/>). <see cref="GetShiftMode"/> shows it as Turbo, as msi-ec does.
+    /// </summary>
+    public bool ShiftModeAmbiguous => UsesMsiLayout(_model) && _model is { MsiSportUnclear: true, ShiftAddress: { } address } && _acpi.ReadEc(address) == MsiSport;
 
     /// <summary>Only values from the model's map ever reach the EC; nothing is written when it already holds the value.</summary>
     public bool SetShiftMode(ShiftMode mode) =>

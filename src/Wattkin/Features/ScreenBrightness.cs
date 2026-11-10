@@ -37,6 +37,10 @@ public sealed class ScreenBrightness : IDisposable
     private static readonly TimeSpan HandoffWithin = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan KeepCheck = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan OwnEchoes = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan PassOnAfter = TimeSpan.FromMilliseconds(400);
+    private static readonly TimeSpan AlignAfter = TimeSpan.FromSeconds(1.5);
+    private static readonly TimeSpan Recheck = TimeSpan.FromMilliseconds(300);
+    private static readonly TimeSpan OwnSetSettles = TimeSpan.FromSeconds(2);
 
     private readonly SettingsStore _store;
     private readonly bool _controls;
@@ -64,6 +68,14 @@ public sealed class ScreenBrightness : IDisposable
     private int _hotkeyRetries;
     private System.Windows.Threading.DispatcherTimer? _retryHotkeys;
     private Timer? _keep;
+    private Timer? _passOn;
+    private Timer? _align;
+    private long _lastOwnSetMs;
+    private Timer? _reread;
+    private int? _keysRest; // under _gate (read outside it only as a hint): WMI's level between Fn key presses, while standing in for them
+    private int? _keyUp;
+    private int? _keyDown;
+    private long _parkedAtMs;
     private ManagementEventWatcher? _brightnessEvents;
     private int? _pending;
     private bool _working;
@@ -179,6 +191,9 @@ public sealed class ScreenBrightness : IDisposable
 
         SystemEvents.DisplaySettingsChanged += OnDisplaysChanged;
         _keep = new Timer(_ => Keep(), null, Timeout.Infinite, Timeout.Infinite);
+        _passOn = new Timer(_ => PassOn(), null, Timeout.Infinite, Timeout.Infinite);
+        _align = new Timer(_ => Align(), null, Timeout.Infinite, Timeout.Infinite);
+        _reread = new Timer(_ => OnSliderChanged(), null, Timeout.Infinite, Timeout.Infinite);
         SetHotkeys(_store.Current.ScreenHotkeys);
         Task.Run(() =>
         {
@@ -208,6 +223,8 @@ public sealed class ScreenBrightness : IDisposable
 
                 if (backlight is not null)
                 {
+                    SliderBrightness.Changed += OnSliderChanged;
+                    SliderBrightness.Watch();
                     WatchBrightness();
                 }
             }
@@ -287,6 +304,14 @@ public sealed class ScreenBrightness : IDisposable
                 return;
             }
 
+            if (SliderBrightness.Active)
+            {
+                // Windows' slider is what the screen follows, and it tells of its own changes. This one is
+                // only worth a look in case it never reached the slider (PassOn).
+                Arm(_passOn, _keysRest is null ? PassOnAfter : TimeSpan.Zero); // standing in for the keys: at once
+                return;
+            }
+
             lock (_gate)
             {
                 if (_disposed)
@@ -303,17 +328,9 @@ public sealed class ScreenBrightness : IDisposable
                     return;
                 }
 
-                if (value == Backlight)
+                if (!Adopt(value))
                 {
                     return;
-                }
-
-                var brighter = value > (Backlight ?? 0);
-                Backlight = value;
-                _backlightVersion++;
-                if (brighter && _store.Current.ScreenExtraDimPercent < 100)
-                {
-                    ShowExtraDim(100);
                 }
             }
 
@@ -322,6 +339,261 @@ public sealed class ScreenBrightness : IDisposable
         catch (Exception ex)
         {
             Log.Error("Reading a screen brightness change failed", ex);
+        }
+    }
+
+    /// <summary>Under the lock: the backlight is at <paramref name="value"/> now, not by Wattkin's doing. False when it already was.</summary>
+    private bool Adopt(int value)
+    {
+        if (value == Backlight)
+        {
+            return false;
+        }
+
+        var brighter = value > (Backlight ?? 0);
+        Backlight = value;
+        _backlightVersion++;
+        if (brighter && _store.Current.ScreenExtraDimPercent < 100)
+        {
+            ShowExtraDim(100);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Windows' slider moved (Settings, Win+A, the Fn keys, or Wattkin's own set coming back). It's read
+    /// again here instead of trusting the event's order, so a late event can't bring back an older value.
+    /// Right after a set of Wattkin's own the service may still report the value before it (a slider
+    /// being dragged sets many), so that is looked at once things are quiet.
+    /// </summary>
+    private void OnSliderChanged()
+    {
+        try
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            if (Environment.TickCount64 - Interlocked.Read(ref _lastOwnSetMs) < OwnSetSettles.TotalMilliseconds)
+            {
+                Arm(_reread, OwnSetSettles);
+                return;
+            }
+
+            Arm(_align, AlignAfter);
+            var healed = false;
+            lock (_gate)
+            {
+                // Read under the lock: a value read before it could be older than a set Wattkin made since,
+                // and adopting that would undo the set (and end an extra dim just begun).
+                if (_disposed || SliderBrightness.Get() is not { } value)
+                {
+                    return;
+                }
+
+                // The screen went to where WMI was only parked for the keys: Windows follows WMI again.
+                if (_keysRest == value && Backlight is { } meant && meant != value && Environment.TickCount64 - _parkedAtMs < OwnEchoes.TotalMilliseconds)
+                {
+                    _keysRest = _keyUp = _keyDown = null;
+                    Log.Info("Windows follows the Fn brightness keys again: Wattkin stopped standing in for them.");
+                    SliderBrightness.Set(meant);
+                    Interlocked.Exchange(ref _lastOwnSetMs, Environment.TickCount64);
+                    healed = true;
+                }
+                else if (!Adopt(value))
+                {
+                    return;
+                }
+            }
+
+            if (!healed)
+            {
+                Changed?.Invoke();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Reading a screen brightness change failed", ex);
+        }
+    }
+
+    /// <summary>
+    /// A brightness change that reached WMI but not the screen: the Fn keys on a laptop where Windows'
+    /// display service has stopped listening to them (see <see cref="SliderBrightness"/>). Seen on the
+    /// Prestige 16 Studio: there a key doesn't step from the current brightness either. "Up" always asks
+    /// for the same value (59%) and "down" for another (39%), ten either side of a level Windows stopped
+    /// updating, and a second press asks for the same again, which changes nothing and raises no event.
+    ///
+    /// So a press only says which way, and Wattkin does the step: Windows' slider moves by
+    /// <see cref="Step"/>, and WMI is put back at the level between the two (<see cref="_keysRest"/>), so the
+    /// next press is a change again. This starts only when things have settled and the screen plainly
+    /// didn't follow a WMI change; normally the slider already shows WMI's value and there's nothing to do.
+    /// </summary>
+    private void PassOn()
+    {
+        try
+        {
+            bool stepped;
+            lock (_gate)
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                stepped = _keysRest is not null && KeyPressed();
+            }
+
+            if (stepped)
+            {
+                ShowKeyOsd();
+                Changed?.Invoke();
+                return;
+            }
+
+            // Wattkin's own change is still arriving in WMI (where the service does listen): not the keys.
+            if (_keysRest is not null || Environment.TickCount64 - Interlocked.Read(ref _lastOwnSetMs) < OwnSetSettles.TotalMilliseconds || !Apart(out _, out var wanted))
+            {
+                return;
+            }
+
+            Thread.Sleep(Recheck); // a change still fading in looks the same for a moment
+            lock (_gate)
+            {
+                if (_disposed || !Apart(out var slider, out var still) || still != wanted)
+                {
+                    return;
+                }
+
+                // The first press: which way it went from the slider, and so where WMI rests between presses.
+                _keysRest = Math.Clamp(wanted > slider ? wanted - Step : wanted + Step, 0, 100);
+                Log.Info($"The Fn brightness keys don't reach the screen on this laptop right now (a press asked for {wanted}% and nothing followed), so Wattkin steps the brightness for them.");
+                if (!KeyPressed())
+                {
+                    return;
+                }
+            }
+
+            ShowKeyOsd();
+            Changed?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Passing a brightness change on failed", ex);
+        }
+    }
+
+    private string? _keyOsd;
+
+    private void ShowKeyOsd()
+    {
+        if (Interlocked.Exchange(ref _keyOsd, null) is { } text)
+        {
+            Osd?.Invoke(text);
+        }
+    }
+
+    /// <summary>Under the lock, standing in for the keys: WMI away from its resting level is a press. False when there was none.</summary>
+    private bool KeyPressed()
+    {
+        if (_keysRest is not { } rest || Platform.Backlight.GetWmi() is not { } asked || asked == rest || SliderBrightness.Get() is not { } now)
+        {
+            return false;
+        }
+
+        var up = asked > rest;
+        if (up)
+        {
+            _keyUp = asked;
+        }
+        else
+        {
+            _keyDown = asked;
+        }
+
+        // Between what the two keys ask for, so either is a change from it.
+        if (_keyUp is { } high && _keyDown is { } low && high - low >= 2)
+        {
+            rest = (high + low) / 2;
+            _keysRest = rest;
+        }
+
+        // One step along the whole range, like Alt+Page Down / Up: below 0% the keys go on into extra dim.
+        if (_store.Current.ScreenExtraDimPercent >= 100)
+        {
+            Backlight = now;
+        }
+
+        var before = Position;
+        var next = StepFrom(before, !up, HasBacklight);
+        Apply(next);
+        _keyOsd = next < 0 || before < 0 ? Describe(next) + (next <= MinPosition ? " (darkest)" : "") : null; // Windows shows its own above 0%
+
+        _parkedAtMs = Environment.TickCount64;
+        Platform.Backlight.SetWmi(rest);
+        return true;
+    }
+
+    /// <summary>
+    /// The other way round, on the same laptops: Windows' slider moved (by Wattkin or Win+A) and WMI
+    /// still holds an old value. WMI is given the slider's, so what reads it (and the first press of an
+    /// Fn key) starts from where the screen is. Not while standing in for the keys: WMI rests then.
+    /// </summary>
+    private void Align()
+    {
+        try
+        {
+            if (_keysRest is not null || !Apart(out var wanted, out _))
+            {
+                return;
+            }
+
+            Thread.Sleep(Recheck);
+            lock (_gate)
+            {
+                if (!_disposed && _keysRest is null && Apart(out var still, out _) && still == wanted)
+                {
+                    Interlocked.Exchange(ref _lastOwnSetMs, Environment.TickCount64); // its WMI event isn't a key press
+                    Platform.Backlight.SetWmi(wanted);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Aligning the screen brightness failed", ex);
+        }
+    }
+
+    /// <summary>
+    /// Windows' slider and WMI have settled on different brightnesses, which only happens where the
+    /// display service has stopped listening to WMI. Not while the screen is away from the slider's value
+    /// (a fade, or battery saver dimming), nor with automatic brightness, which moves the screen by itself.
+    /// </summary>
+    private bool Apart(out int slider, out int wmi)
+    {
+        slider = wmi = 0;
+        if (_disposed || SliderBrightness.Read() is not { Automatic: false } reading || Platform.Backlight.GetWmi() is not { } old)
+        {
+            return false;
+        }
+
+        // The screen at the slider's value: nothing is fading, and nothing (battery saver) dims below it.
+        slider = reading.User;
+        wmi = old;
+        return reading.Screen == reading.User && old != reading.User;
+    }
+
+    /// <summary>Starts a timer's wait again; an event arriving as Wattkin exits finds it gone.</summary>
+    private static void Arm(Timer? timer, TimeSpan after)
+    {
+        try
+        {
+            timer?.Change(after, Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException)
+        {
         }
     }
 
@@ -425,9 +697,10 @@ public sealed class ScreenBrightness : IDisposable
                     return;
                 }
 
-                if (_store.Current.ScreenExtraDimPercent >= 100)
+                // In case a change was missed. Not straight after a press, when the service may still say the value before it.
+                if (_store.Current.ScreenExtraDimPercent >= 100 && Environment.TickCount64 - Interlocked.Read(ref _lastOwnSetMs) > OwnSetSettles.TotalMilliseconds)
                 {
-                    Backlight = Platform.Backlight.Get(); // in case a change was missed
+                    Backlight = Platform.Backlight.Get();
                     _backlightVersion++;
                 }
 
@@ -454,7 +727,12 @@ public sealed class ScreenBrightness : IDisposable
         {
             Backlight = b;
             _backlightVersion++;
-            _ownSets.Add((b, Environment.TickCount64)); // its event echoes back later
+            if (!SliderBrightness.Active)
+            {
+                _ownSets.Add((b, Environment.TickCount64)); // its WMI event echoes back later
+            }
+
+            Interlocked.Exchange(ref _lastOwnSetMs, Environment.TickCount64);
         }
 
         ShowExtraDim(extraDim);
@@ -715,6 +993,7 @@ public sealed class ScreenBrightness : IDisposable
     private void OnDisplaysChanged(object? sender, EventArgs e) => Task.Run(async () =>
     {
         await Task.Delay(1500).ConfigureAwait(false); // let the new mode settle
+        SliderBrightness.DisplaysChanged();
         try
         {
             lock (_gate)
@@ -886,6 +1165,14 @@ public sealed class ScreenBrightness : IDisposable
         }
 
         _keep?.Dispose(); // after the restore above, which re-arms it
+        _passOn?.Dispose();
+        _align?.Dispose();
+        _reread?.Dispose();
+        if (_controls)
+        {
+            SliderBrightness.Changed -= OnSliderChanged;
+            SliderBrightness.Stop();
+        }
 
         try
         {

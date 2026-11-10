@@ -5,14 +5,21 @@ using Wattkin.Native;
 namespace Wattkin.Platform;
 
 /// <summary>
-/// The built-in panel's backlight: the brightness Windows' own slider and the Fn keys set, through
+/// The built-in panel's backlight: the brightness Windows' own slider and the Fn keys set. Through
+/// Windows' slider itself where that's possible (<see cref="SliderBrightness"/>), else through
 /// Windows' WMI monitor classes (root\WMI WmiMonitorBrightness / WmiMonitorBrightnessMethods). Only
 /// panels whose driver supports it (laptop screens) have one; external monitors don't.
 /// </summary>
 internal static class Backlight
 {
     /// <summary>The panel's brightness in percent, or null when there's no backlight Windows controls.</summary>
-    public static int? Get()
+    public static int? Get() => SliderBrightness.Get() ?? GetWmi();
+
+    /// <summary>Sets the panel's brightness (0–100%), as Windows' slider does. False when there's no backlight to set.</summary>
+    public static bool Set(int percent) => SliderBrightness.Set(percent) || SetWmi(percent);
+
+    /// <summary>The brightness WMI reports: what was last asked for through the older interfaces (or by the Fn keys).</summary>
+    public static int? GetWmi()
     {
         try
         {
@@ -36,8 +43,8 @@ internal static class Backlight
         return null;
     }
 
-    /// <summary>Sets the panel's brightness (0–100%), as Windows' slider does. False when there's no backlight to set.</summary>
-    public static bool Set(int percent)
+    /// <summary>Asks for a brightness through WMI. False when there is no backlight to set.</summary>
+    public static bool SetWmi(int percent)
     {
         try
         {

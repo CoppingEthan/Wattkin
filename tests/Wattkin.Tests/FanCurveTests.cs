@@ -190,11 +190,14 @@ public class FanCurveTests
         var olderLayout = EcModels.Find("158LEMS1.105")!; // CONF_G1_2: no sport mode
         Assert.False(EmbeddedController.ShiftRegisterLooksRight(olderLayout, 0xC0));
 
-        // CONF_G2_10, where msi-ec says turbo is "sometimes 0xc0": 0xC0 isn't taken as Sport (read-only, as in 1.1.1).
-        var g210 = EcModels.Find("1822EMS1.111")!;
+        // CONF_G2_10, where msi-ec says turbo is "sometimes 0xc0": Sport or turbo, 0xC0 is a mode of the
+        // register, so the map fits (a Vector 16 HX AI left in it was read-only until 1.3.0).
+        var g210 = EcModels.Find("15M3EMS1.113")!;
         Assert.Equal("msi-ec CONF_G2_10", g210.Source);
-        Assert.False(EmbeddedController.ShiftRegisterLooksRight(g210, 0xC0));
+        Assert.True(g210.MsiSportUnclear);
+        Assert.True(EmbeddedController.ShiftRegisterLooksRight(g210, 0xC0));
         Assert.True(EmbeddedController.ShiftRegisterLooksRight(g210, 0xC4));
+        Assert.False(EmbeddedController.ShiftRegisterLooksRight(g210, 0xC3));
         Assert.True(EmbeddedController.ShiftRegisterLooksRight(EcModels.Find("1563EMS1.115")!, 0xC0)); // the Stealth 15M's own map names it
     }
 

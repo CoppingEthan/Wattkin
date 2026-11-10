@@ -163,13 +163,15 @@ public sealed partial class HardwareService : IDisposable
         if (_controls)
         {
             // The laptop in MSI's Sport mode by itself: its firmware has one, so profiles may use it.
-            if (ec.CanWrite && ec.ShiftAtStart == EmbeddedController.MsiSport && !_store.Current.SportModeSeen)
+            if (ec.CanWrite && ec.HasSportMode && ec.ShiftAtStart == EmbeddedController.MsiSport && !_store.Current.SportModeSeen)
             {
                 _store.Update(s => s.SportModeSeen = true);
                 Log.Info("The laptop was in MSI's Sport mode (0xC0): Sport is offered in profiles from now on.");
             }
 
-            if (!_store.Current.HardwareAdopted)
+            // Again, once, for a laptop that was read-only until now because it sat in 0xC0 (ShiftModeAmbiguous):
+            // 1.3.0 adopted it as "Performance" without being able to write, and that must not be applied now.
+            if (!_store.Current.HardwareAdopted || (ec.CanWrite && ec.ShiftModeAmbiguous && !_store.Current.AmbiguousModeAdopted))
             {
                 AdoptCurrentHardwareState(ec);
             }
@@ -236,7 +238,9 @@ public sealed partial class HardwareService : IDisposable
     {
         var limit = ec.GetChargeLimit();
         var autoOff = ec.GetKeyboardAutoOff();
-        var shift = ec.GetShiftMode();
+        // 0xC0 where it may be Sport or turbo: the Balanced profile, with the mode itself left as it is (below).
+        var ambiguous = ec.ShiftModeAmbiguous;
+        var shift = ambiguous ? ShiftMode.Balanced : ec.GetShiftMode();
         var fan = ec.GetFanMode();
         var boost = ec.GetCoolerBoost();
 
@@ -276,6 +280,12 @@ public sealed partial class HardwareService : IDisposable
             if (shift == ShiftMode.Sport)
             {
                 profile.Performance = ShiftMode.Sport; // as the laptop is now: adopting changes nothing
+            }
+
+            if (ambiguous)
+            {
+                profile.Performance = null; // Wattkin can't name this mode: it stays until the user picks one
+                s.AmbiguousModeAdopted = true;
             }
 
             if (fan == FanMode.Custom)

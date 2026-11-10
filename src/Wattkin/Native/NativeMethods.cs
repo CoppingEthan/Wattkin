@@ -289,6 +289,22 @@ internal static partial class Gdi32
     public static unsafe partial bool GetDeviceGammaRamp(IntPtr dc, ushort* ramp);
 }
 
+/// <summary>Just enough of the Windows Runtime to reach one class by name (SliderBrightness).</summary>
+internal static partial class Combase
+{
+    [LibraryImport("combase.dll")]
+    public static partial int RoInitialize(int type);
+
+    [LibraryImport("combase.dll")]
+    public static unsafe partial int WindowsCreateString(char* text, int length, out IntPtr value);
+
+    [LibraryImport("combase.dll")]
+    public static partial int WindowsDeleteString(IntPtr value);
+
+    [LibraryImport("combase.dll")]
+    public static unsafe partial int RoGetActivationFactory(IntPtr className, Guid* interfaceId, out IntPtr factory);
+}
+
 internal static partial class PowrProf
 {
     [LibraryImport("powrprof.dll")]
