@@ -83,7 +83,7 @@ You don't need MSI Center, and you never need to install it. If it's already on 
 | --- | --- |
 | MSI Prestige 16 Studio A13VE | Everything, tested on the real laptop |
 | MSI Stealth 15M A11UEK (EC `1563EMS1.115`) | Everything the laptop has, with whole fan tables (temperatures too) and its Mystic Light keyboard. Passed the hardware self-test on the real laptop |
-| MSI Prestige 13 AI Evo A1MG | Working, from a user's report (one fan) |
+| MSI Prestige 13 AI Evo A1MG | Working (one fan), including on a clean Windows install that never had MSI Center. Thanks to [apeto86](https://github.com/apeto86) for testing and reporting back |
 | Other recent MSI laptops, including those known to the Linux [msi-ec](https://github.com/BeardOverflow/msi-ec) project | Everything the laptop supports, after a safety check at startup |
 | Older MSI laptops, the newest MSI laptops (firmware interface version 3), and other brands | Watts, battery and system readings, without hardware controls |
 
