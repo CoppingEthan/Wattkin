@@ -1195,13 +1195,13 @@ public partial class SettingsWindow : Window
         if (_firmwareCurves is not { } firmware)
         {
             FanEditorPanel.Visibility = Visibility.Collapsed;
-            FanNewButton.IsEnabled = FanDuplicateButton.IsEnabled = false;
+            FanNewButton.IsEnabled = FanDuplicateButton.IsEnabled = FanRestoreButton.IsEnabled = false;
             FanIntro.Text = "Fan profiles need administrator rights and an MSI laptop whose fan table Wattkin can read.";
             return;
         }
 
         FanEditorPanel.Visibility = Visibility.Visible;
-        FanNewButton.IsEnabled = FanDuplicateButton.IsEnabled = true;
+        FanNewButton.IsEnabled = FanDuplicateButton.IsEnabled = FanRestoreButton.IsEnabled = true;
         var table = FactoryTable();
         FanIntro.Text = builtIn
             ? "The curve your laptop came with. It can't be changed here: duplicate it to make your own."

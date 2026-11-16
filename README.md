@@ -52,11 +52,11 @@ You don't need MSI Center, and you never need to install it. If it's already on 
 - **Charge limits** - Stop charging anywhere from 10% to 100%, charge to 100% once for a long day away, or bring the battery down to the limit while plugged in.
 - **Battery health** - Capacity, health and history, plus MSI's calibration for when the battery gauge drifts.
 - **Profiles** - CPU power (including MSI's Sport mode where the laptop has it), fans, Windows power mode, turbo, maximum state and frequency, performance or efficiency, refresh rate and keyboard light, each set separately or left as it is. Profiles switch by themselves when you plug in or unplug, or when the battery runs low. On the Prestige 16 Studio, Quiet keeps the fans off until the CPU reaches 60°C.
-- **Fan profiles** - Make named fan curves, each fan's speed at each of the laptop's temperature steps, and pick one in any profile. On laptops where Wattkin writes the whole fan table (the Stealth 15M A11UEK), the temperatures too. Fans can also be set to full speed, or off (experimental). Safety rules keep the fans ahead of the heat unless you accept the experimental mode, if you'd rather let the laptop run hot and throttle.
+- **Fan profiles** - Make named fan curves, each fan's speed at each of the laptop's temperature steps, and pick one in any profile. On laptops where Wattkin writes the whole fan table (the Stealth 15M A11UEK), the temperatures too. Fans can also be set to full speed, or off (experimental), and Wattkin's own Quiet and Cool can be put back as they came. Safety rules keep the fans ahead of the heat unless you accept the experimental mode, if you'd rather let the laptop run hot and throttle.
 - **Screen brightness** - Alt+Page Down and Alt+Page Up, or a slider in the flyout. Below the lowest brightness it keeps going with an extra dim, like f.lux, for working in the dark.
 - **Monitoring** - CPU, Intel graphics and RTX load and watts, temperatures, fans, RAM and disk.
 - **Keyboard and keys** - Backlight brightness and auto-off, and the colour on RGB keyboards lit by Mystic Light. The mic-mute key, the mute lights and the MSI keys keep working without MSI Center.
-- **NVIDIA GPU** - See whether the RTX is asleep or working, and switch between Hybrid and Integrated-only.
+- **NVIDIA GPU** - See whether the RTX is asleep or working, and switch between Hybrid and Integrated-only (and Discrete-only where the laptop has it: untested so far).
 - **Simple and Expert settings** - One simple page for everyday use, and an Expert view with every control and a Debug tab for fan tests and diagnostics.
 
 <p align="center">
@@ -84,6 +84,8 @@ You don't need MSI Center, and you never need to install it. If it's already on 
 | MSI Prestige 16 Studio A13VE | Everything, tested on the real laptop |
 | MSI Stealth 15M A11UEK (EC `1563EMS1.115`) | Everything the laptop has, with whole fan tables (temperatures too) and its Mystic Light keyboard. Passed the hardware self-test on the real laptop |
 | MSI Prestige 13 AI Evo A1MG | Working (one fan), including on a clean Windows install that never had MSI Center. Thanks to [apeto86](https://github.com/apeto86) for testing and reporting back |
+| MSI Vector 16 HX AI A2XWIG / A2XWHG | Working, with its 24-zone keyboard light in one colour and the Cooler Boost key. Thanks to [Welld1s](https://github.com/Welld1s) for the reports, the fixes and the testing |
+| MSI GP76 Leopard 11UH | Charge limit, performance modes and fans (the keyboard light is not controllable) |
 | Other recent MSI laptops, including those known to the Linux [msi-ec](https://github.com/BeardOverflow/msi-ec) project | Everything the laptop supports, after a safety check at startup |
 | Older MSI laptops, the newest MSI laptops (firmware interface version 3), and other brands | Watts, battery and system readings, without hardware controls |
 

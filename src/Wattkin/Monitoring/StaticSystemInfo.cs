@@ -59,7 +59,7 @@ public sealed record StaticSystemInfo(
                 };
             }
         }
-        catch (ManagementException)
+        catch (Exception ex) when (ex is ManagementException or System.Runtime.InteropServices.COMException or UnauthorizedAccessException or InvalidCastException or FormatException or OverflowException)
         {
             // Leave defaults; this is display-only information.
         }

@@ -534,6 +534,9 @@ public sealed class EmbeddedController : IEcSensorSource
         return cpu is not null && gpu is not null ? new FanCurves(cpu, gpu) : null;
     }
 
+    /// <summary>Cooler Boost for display: read without counting as seen (<see cref="CoolerBoostKeyPressed"/>).</summary>
+    public bool? PeekCoolerBoost() => _model?.CoolerBoostAddress is { } address ? Bit(address, _model.CoolerBoostBit) : null;
+
     public bool? GetCoolerBoost()
     {
         var boost = _model?.CoolerBoostAddress is { } address ? Bit(address, _model.CoolerBoostBit) : null;

@@ -102,6 +102,7 @@ public sealed class BatteryLog
             _lastFlushUtc = DateTime.UtcNow;
         }
 
+        var written = new HashSet<string>();
         Safe(() =>
         {
             System.IO.Directory.CreateDirectory(_directory);
@@ -119,8 +120,22 @@ public sealed class BatteryLog
                 }
 
                 File.AppendAllText(group.Key, text.ToString());
+                written.Add(group.Key);
             }
         });
+
+        // A file that couldn't be written (open in Excel, say): its lines wait for the next flush.
+        var unwritten = lines.Where(l => !written.Contains(l.File)).ToList();
+        if (unwritten.Count > 0)
+        {
+            lock (_gate)
+            {
+                if (_pending.Count + unwritten.Count <= 5000) // a file that stays locked mustn't grow this for ever
+                {
+                    _pending.InsertRange(0, unwritten);
+                }
+            }
+        }
     }
 
     private void RecordCapacity(DateOnly day, BatteryInfo info)

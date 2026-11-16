@@ -388,6 +388,7 @@ public sealed class AppSettings
 
         bool IsDefault(FanProfile f) => restored.Any(d => string.Equals(d.Name, f.Name, StringComparison.OrdinalIgnoreCase));
         FanProfiles = [.. restored, .. FanProfiles.Where(f => !IsDefault(f))];
+        restored.ForEach(d => RenameFanProfile(d.Name, d.Name)); // a profile that named it "quiet" follows the spelling
     }
 
     public void RenameFanProfile(string oldName, string? newName)

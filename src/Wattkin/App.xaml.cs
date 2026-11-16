@@ -20,6 +20,7 @@ public partial class App : Application
     private bool _exiting;
     private bool _restarting;
     private double? _lastSavedRest;
+    private long _lastLearnedSaveTicks;
 
     public static new App Current => (App)Application.Current;
 
@@ -513,12 +514,14 @@ public partial class App : Application
     /// <summary>Saves the learned rest-of-system draw only when it has moved meaningfully.</summary>
     private void SaveLearned(bool force)
     {
-        if (Monitor.Power.RestOfSystemWatts is not { } rest || (!force && _lastSavedRest is { } saved && Math.Abs(saved - rest) < 0.1))
+        if (Monitor.Power.RestOfSystemWatts is not { } rest || (!force && _lastSavedRest is { } saved && Math.Abs(saved - rest) < 0.1)
+            || (!force && _lastSavedRest is not null && Environment.TickCount64 - _lastLearnedSaveTicks < 600_000))
         {
             return;
         }
 
         _lastSavedRest = rest;
+        _lastLearnedSaveTicks = Environment.TickCount64;
         Store.Update(s =>
         {
             s.LearnedRestOfSystemWatts = rest;

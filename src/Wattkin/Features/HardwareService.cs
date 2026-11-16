@@ -796,7 +796,7 @@ public sealed partial class HardwareService : IDisposable
         }
 
         var error = FirmwareGpuSwitch.RequestMode(mode, _acpi);
-        if (error is null && mode == FirmwareGpuMode.Integrated && DiscreteGpu.Query().State == DgpuState.DisabledInWindows)
+        if (error is null && mode is FirmwareGpuMode.Integrated or FirmwareGpuMode.Discrete && DiscreteGpu.Query().State == DgpuState.DisabledInWindows)
         {
             // Windows remembers a disabled device: turn it back on now, or it returns disabled in Hybrid.
             DiscreteGpu.Enable();
@@ -1106,7 +1106,7 @@ public sealed partial class HardwareService : IDisposable
             ec.GetChargeLimit(),
             ec.GetShiftMode(),
             ec.GetFanMode(),
-            ec.GetCoolerBoost(),
+            ec.PeekCoolerBoost(),
             KeyboardLevelNow(ec),
             ec.GetKeyboardAutoOff(),
             ec.GetWebcam(),

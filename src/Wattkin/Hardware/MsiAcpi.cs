@@ -175,7 +175,7 @@ public sealed class MsiAcpi : IDisposable
     public bool WriteEc(byte address, byte value, bool log = true)
     {
         var ok = Set("Set_Data", address, [value]);
-        if ((ok && log) || (!ok && _failuresLogged < 20))
+        if ((ok && log) || (!ok && _failuresLogged++ < 20))
         {
             Log.Info($"EC write 0x{address:X2} = 0x{value:X2} -> {(ok ? "ok" : "FAILED")}");
         }

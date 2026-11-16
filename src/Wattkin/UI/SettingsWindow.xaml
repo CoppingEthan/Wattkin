@@ -187,7 +187,7 @@
                         <Button x:Name="FanNewButton" Content="New" Click="OnFanProfileNew" Margin="0,0,6,0" IsEnabled="False" />
                         <Button x:Name="FanDuplicateButton" Content="Duplicate" Click="OnFanProfileDuplicate" Margin="0,0,6,0" IsEnabled="False" />
                         <Button x:Name="FanDeleteButton" Content="Delete" Click="OnFanProfileDelete" Margin="0,0,6,0" />
-                        <Button x:Name="FanRestoreButton" Content="Restore Quiet and Cool" Click="OnFanProfileRestore" ToolTip="Puts Wattkin's own Quiet and Cool fan profiles back as they came" />
+                        <Button x:Name="FanRestoreButton" Content="Restore Quiet and Cool" Click="OnFanProfileRestore" IsEnabled="False" ToolTip="Puts Wattkin's own Quiet and Cool fan profiles back as they came" />
                     </StackPanel>
                     <ListBox x:Name="FanProfileList" SelectionChanged="OnFanProfileSelected" />
                 </DockPanel>
