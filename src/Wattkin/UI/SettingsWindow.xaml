@@ -141,7 +141,7 @@
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <TextBlock Text="Fans" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PFan" Grid.Column="1" SelectionChanged="OnProfileFanChanged" /></Grid>
                                 <TextBlock x:Name="SilentFanPowerWarning" Style="{StaticResource Lc.Hint}"
-                                           Foreground="#9A7400" Margin="180,0,0,6"
+                                           Foreground="{DynamicResource Lc.Warn}" Margin="180,0,0,6"
                                            Visibility="Collapsed" TextWrapping="Wrap"
                                            Text="Silent fan mode may also reduce the GPU power limit. Use Auto or a custom fan curve to retain higher GPU performance." />
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
@@ -155,7 +155,7 @@
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <TextBlock Text="Performance or efficiency" Style="{StaticResource Lc.Label}" ToolTip="Windows' energy performance preference (EPP)" /><ComboBox x:Name="PEpp" Grid.Column="1" SelectionChanged="OnProfileWindowsOrEppChanged" /></Grid>
                                 <TextBlock x:Name="WindowsEppConflictWarning" Style="{StaticResource Lc.Hint}"
-                                           Foreground="#9A7400" Margin="180,0,0,6"
+                                           Foreground="{DynamicResource Lc.Warn}" Margin="180,0,0,6"
                                            Visibility="Collapsed" TextWrapping="Wrap"
                                            Text="When Windows power mode and Performance or efficiency (EPP) are both set, EPP may not take effect or may change unexpectedly. For more predictable behavior, set one of them to Unchanged." />
                                 <TextBlock Style="{StaticResource Lc.Hint}" Margin="180,0,0,0" TextWrapping="Wrap" Text="Turbo, max state, frequency and performance-or-efficiency are settings of Windows' active power plan. A max state below 100% also stops turbo; a frequency cap keeps some turbo. Performance-or-efficiency is how eagerly the processor speeds up for everyday work (Windows' 'Best power efficiency' mode may override it on battery)." />
@@ -164,7 +164,7 @@
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <TextBlock Text="Keyboard light" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PKeyboard" Grid.Column="1" /></Grid>
                                 <TextBlock x:Name="EcoKeyboardProfileWarning" Style="{StaticResource Lc.Hint}"
-                                           Foreground="#C62828" Margin="180,0,0,6"
+                                           Foreground="{DynamicResource Lc.Warn}" Margin="180,0,0,6"
                                            Visibility="Collapsed" TextWrapping="Wrap"
                                            Text="Eco mode forces the keyboard backlight off. Keyboard light settings cannot override it." />
                                 <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
@@ -230,7 +230,7 @@
                         <StackPanel>
                             <TextBlock Text="Keyboard backlight" Style="{StaticResource Lc.Section}" />
                             <TextBlock x:Name="EcoKeyboardActiveWarning" Style="{StaticResource Lc.Hint}"
-                                       Foreground="#C62828" Margin="0,0,0,10"
+                                       Foreground="{DynamicResource Lc.Warn}" Margin="0,0,0,10"
                                        Visibility="Collapsed" TextWrapping="Wrap"
                                        Text="Eco CPU power mode is active and forces the keyboard backlight off. Change CPU power (EC) mode to control the backlight." />
                             <WrapPanel x:Name="KbLevelPanel" Margin="0,0,0,10" />

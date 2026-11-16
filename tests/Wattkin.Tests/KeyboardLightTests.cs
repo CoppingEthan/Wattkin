@@ -70,4 +70,46 @@ public sealed class KeyboardLightTests
         settings.Normalize();
         Assert.Equal("#00FF7F", settings.KeyboardColor);
     }
+
+    // MSI Center's packets to the 24-zone MS-1603 (Vector 16 HX AI, 1462:1603), from the USB captures in
+    // N3uralCreativity/MSI-KeyLight (docs/hardware-notes.md): a zone mask, then the colour.
+    private const string Ms1603Colour = "02 02 01 58 02 00 32 08 01 01 00 ff 00 00 64 ff 00 00";
+
+    [Fact]
+    public void TheMs1603GetsMsiCentersZoneMaskThenColour()
+    {
+        var (mask, colour) = MysticLight.Packet1603(3, new LightColor(0xFF, 0, 0));
+        Assert.Equal(Captured("02 01 ff ff ff"), mask); // all 24 zones
+        Assert.Equal(Captured(Ms1603Colour), colour);
+    }
+
+    [Fact]
+    public void TheMs1603DimsByScalingTheColourAndOffIsBlack()
+    {
+        Assert.Equal([0, 84, 171, 255], new[] { 0, 1, 2, 3 }.Select(level => (int)MysticLight.Packet1603(level, LightColor.White).Color[11]));
+        var (_, off) = MysticLight.Packet1603(0, new LightColor(0x12, 0x34, 0x56));
+        Assert.All(new[] { 11, 12, 13, 15, 16, 17 }, i => Assert.Equal(0, off[i]));
+        Assert.Equal(MysticLight.Packet1603(3, LightColor.White).Color, MysticLight.Packet1603(9, LightColor.White).Color); // clamped
+    }
+
+    [Fact]
+    public void OnlyTheMs1603IsAcceptedOnItsOwnUsagePage()
+    {
+        const string Ms1603 = @"\?\hid#vid_1462&pid_1603#6&a3fe5ce&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
+        const string Ms1562 = @"\?\hid#vid_1462&pid_1562#6&a3fe5ce&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
+        Assert.True(new MysticLightInfo(Ms1603, "MysticLight MS-1603", 0xFF00, 64).Usable);
+        Assert.False(new MysticLightInfo(Ms1603, "MysticLight MS-1603", 0xFF00, 65).Usable);
+        Assert.False(new MysticLightInfo(Ms1562, "MysticLight MS-1562", 0xFF00, 64).Usable);
+        Assert.True(new MysticLightInfo(Ms1562, "MysticLight MS-1562", 0x00FF, 64).Usable);
+    }
+
+    [Fact]
+    public void TheCoolerBoostKeyIsNotToggledTwiceWhereTheFirmwareTogglesIt()
+    {
+        Assert.True(EmbeddedController.ShouldToggleCoolerBoost(before: false, now: false));  // firmware left it: Wattkin toggles
+        Assert.True(EmbeddedController.ShouldToggleCoolerBoost(before: true, now: true));
+        Assert.False(EmbeddedController.ShouldToggleCoolerBoost(before: false, now: true));  // firmware switched it on already
+        Assert.False(EmbeddedController.ShouldToggleCoolerBoost(before: true, now: false));
+        Assert.True(EmbeddedController.ShouldToggleCoolerBoost(before: null, now: false));   // never seen: as before
+    }
 }

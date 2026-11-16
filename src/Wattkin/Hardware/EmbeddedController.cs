@@ -534,10 +534,56 @@ public sealed class EmbeddedController : IEcSensorSource
         return cpu is not null && gpu is not null ? new FanCurves(cpu, gpu) : null;
     }
 
-    public bool? GetCoolerBoost() => _model?.CoolerBoostAddress is { } address ? Bit(address, _model.CoolerBoostBit) : null;
+    public bool? GetCoolerBoost()
+    {
+        var boost = _model?.CoolerBoostAddress is { } address ? Bit(address, _model.CoolerBoostBit) : null;
+        if (boost is not null)
+        {
+            _coolerBoostSeen = boost;
+        }
 
-    public bool SetCoolerBoost(bool enabled) =>
-        _model?.CoolerBoostAddress is { } address && WriteBit(address, _model.CoolerBoostBit, enabled);
+        return boost;
+    }
+
+    public bool SetCoolerBoost(bool enabled)
+    {
+        var written = _model?.CoolerBoostAddress is { } address && WriteBit(address, _model.CoolerBoostBit, enabled);
+        if (written)
+        {
+            _coolerBoostSeen = enabled;
+        }
+
+        return written;
+    }
+
+    /// <summary>Cooler Boost as Wattkin last read or wrote it: what it was before a key press.</summary>
+    private volatile object? _coolerBoostSeen;
+
+    /// <summary>
+    /// Fn + Up. Some firmware switches Cooler Boost itself on that key (Vector 16 HX AI 15M3EMS1, GP76
+    /// Leopard 17K3EMS1: GitHub issues 6 and 11), some leaves it to the app (Prestige 16 Studio). Toggling
+    /// after the firmware did undoes the press, so: give the firmware a moment, and toggle only if the
+    /// state is still what Wattkin last saw. Returns the state afterwards; null when it can't be read.
+    /// </summary>
+    public bool? CoolerBoostKeyPressed()
+    {
+        var before = _coolerBoostSeen as bool?;
+        Thread.Sleep(150);
+        if (GetCoolerBoost() is not { } now)
+        {
+            return null;
+        }
+
+        if (!ShouldToggleCoolerBoost(before, now))
+        {
+            return now;
+        }
+
+        return SetCoolerBoost(!now) ? !now : now;
+    }
+
+    /// <summary>False when the firmware already changed the state since Wattkin last saw it.</summary>
+    internal static bool ShouldToggleCoolerBoost(bool? before, bool now) => before is null || before == now;
 
     // ---- Keyboard / LEDs / webcam -------------------------------------------------------------
 

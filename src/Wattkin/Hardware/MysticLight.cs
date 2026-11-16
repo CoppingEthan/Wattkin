@@ -27,8 +27,11 @@ public readonly record struct LightColor(byte R, byte G, byte B)
 /// <summary>What Windows reports about a Mystic Light controller, without opening it for writing.</summary>
 public sealed record MysticLightInfo(string Path, string Product, ushort UsagePage, int FeatureReportLength)
 {
-    /// <summary>The report layout the protocol needs: MSI's usage page 0x00FF and 64-byte feature reports.</summary>
-    public bool Usable => FeatureReportLength == MysticLight.ReportLength && (UsagePage == MysticLight.UsagePage || (UsagePage == 0xFF00 && Path.Contains("vid_1462&pid_1603", StringComparison.OrdinalIgnoreCase)));
+    /// <summary>The 24-zone MS-1603 (Vector 16 HX AI): its own usage page and packets (<see cref="MysticLight.Packet1603"/>).</summary>
+    public bool Is1603 => Path.Contains("vid_1462&pid_1603", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The report layout the protocol needs: 64-byte feature reports on MSI's usage page (0x00FF; 0xFF00 on the MS-1603).</summary>
+    public bool Usable => FeatureReportLength == MysticLight.ReportLength && UsagePage == (Is1603 ? MysticLight.UsagePage1603 : MysticLight.UsagePage);
 
     /// <summary>
     /// This controller lights the keys, not the EC's register: the Stealth 15M A11UEK's 1462:1562 (seen to
@@ -67,6 +70,7 @@ public sealed record MysticLightInfo(string Path, string Product, ushort UsagePa
 internal sealed class MysticLight : IDisposable
 {
     public const ushort UsagePage = 0x00FF;
+    public const ushort UsagePage1603 = 0xFF00;
     public const int ReportLength = 64;
     public const int MaxLevel = 3;
 
@@ -185,7 +189,7 @@ internal sealed class MysticLight : IDisposable
     /// <param name="log">False for auto-off's frequent switching: then only a failure is logged.</param>
     public bool Set(int level, LightColor color, bool log = true)
     {
-        var is1603 = Info.Path.Contains("vid_1462&pid_1603", StringComparison.OrdinalIgnoreCase);
+        var is1603 = Info.Is1603;
         var packet = is1603 ? null : Packet(level, color);
         bool ok;
         int error;
