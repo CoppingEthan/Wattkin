@@ -776,6 +776,7 @@ public partial class SettingsWindow : Window
             _loading = false;
         }
 
+        UpdatePlatformWarnings();
         RefreshCalibration();
         UpdateCalibrationSuggestion();
         RefreshDebugControls(state);
@@ -980,6 +981,7 @@ public partial class SettingsWindow : Window
         {
             _selectingProfile = false;
         }
+        UpdatePlatformWarnings();
     }
 
     // ---- a profile's fans: one choice ------------------------------------------------------------
@@ -1047,6 +1049,7 @@ public partial class SettingsWindow : Window
         _selectingProfile = true;
         Select(PFan, stillOffered ? selected : _editing is { } editing ? FanChoice(editing) : "auto");
         _selectingProfile = false;
+        UpdatePlatformWarnings();
     }
 
     /// <summary>"Off" needs the experimental warning accepted first; declining puts the old choice back.</summary>
@@ -1058,10 +1061,48 @@ public partial class SettingsWindow : Window
             _selectingProfile = true;
             Select(PFan, _fanChoice ?? "auto");
             _selectingProfile = false;
+            UpdatePlatformWarnings();
             return;
         }
 
         _fanChoice = choice;
+        UpdatePlatformWarnings();
+    }
+
+    private void OnProfileShiftChanged(object sender, SelectionChangedEventArgs e) => UpdatePlatformWarnings();
+
+    /// <summary>Show firmware-specific warnings and disable keyboard controls overridden by Eco.</summary>
+    private void UpdatePlatformWarnings()
+    {
+        // SelectionChanged can fire while the XAML tree is still being built.
+        if (PShift is null || PFan is null || PKeyboard is null || SilentFanPowerWarning is null
+            || EcoKeyboardProfileWarning is null || EcoKeyboardActiveWarning is null
+            || KbLevelPanel is null || KbColorPanel is null || KbTimeoutPanel is null || KbDelayHost is null)
+        {
+            return;
+        }
+
+        var state = App.Current.Hardware.State;
+        var affected = state.EcFirmware?.StartsWith("15M3EMS1.", StringComparison.OrdinalIgnoreCase) == true;
+        var ecoSelected = (PShift.SelectedItem as ComboBoxItem)?.Tag is ShiftMode.Eco;
+        var silentSelected = TagOf<string>(PFan) == "silent";
+        var profileEco = affected && ecoSelected;
+        var activeEco = affected && state.Shift == ShiftMode.Eco;
+
+        SilentFanPowerWarning.Visibility = affected && silentSelected && !ecoSelected ? Visibility.Visible : Visibility.Collapsed;
+        EcoKeyboardProfileWarning.Visibility = profileEco ? Visibility.Visible : Visibility.Collapsed;
+        EcoKeyboardActiveWarning.Visibility = activeEco ? Visibility.Visible : Visibility.Collapsed;
+
+        // Preserve the profile's selected value; only disallow editing while Eco is selected.
+        PKeyboard.IsEnabled = !profileEco;
+
+        // Keyboard & keys controls reflect the actual EC mode, not an unsaved profile selection.
+        // Preserve the existing permissions and hardware capability restrictions outside Eco.
+        KbLevelPanel.IsEnabled = !activeEco && state.CanWrite;
+        KbColorPanel.IsEnabled = !activeEco && state.CanWrite;
+        KbTimeoutPanel.IsEnabled = !activeEco && state.Caps?.HasKeyboardTimeout != false;
+        KbDelayHost.IsEnabled = !activeEco && state.CanWrite
+            && App.Current.Store.Current.KeyboardTimeout != KeyboardTimeout.AlwaysOn;
     }
 
     /// <summary>The experimental warning. True when the user accepts (remembered) or already had.</summary>
