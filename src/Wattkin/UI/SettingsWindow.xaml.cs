@@ -980,6 +980,7 @@ public partial class SettingsWindow : Window
         {
             _selectingProfile = false;
         }
+        UpdateWindowsEppWarning();
     }
 
     // ---- a profile's fans: one choice ------------------------------------------------------------
@@ -1062,6 +1063,25 @@ public partial class SettingsWindow : Window
         }
 
         _fanChoice = choice;
+    }
+
+    private void OnProfileWindowsOrEppChanged(object sender, SelectionChangedEventArgs e) => UpdateWindowsEppWarning();
+
+    /// <summary>Warn when a Windows power mode and an explicit EPP are selected together.</summary>
+    private void UpdateWindowsEppWarning()
+    {
+        // WPF can raise SelectionChanged during InitializeComponent.
+        if (PWindows is null || PEpp is null || WindowsEppConflictWarning is null)
+        {
+            return;
+        }
+
+        var hasWindowsMode = PWindows.SelectedItem is ComboBoxItem { Tag: WindowsPowerMode mode }
+            && mode != WindowsPowerMode.Unchanged;
+        // EPP 0 is valid; null is the Unchanged choice.
+        var hasEpp = PEpp.SelectedItem is ComboBoxItem { Tag: int };
+        WindowsEppConflictWarning.Visibility = hasWindowsMode && hasEpp
+            ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>The experimental warning. True when the user accepts (remembered) or already had.</summary>
