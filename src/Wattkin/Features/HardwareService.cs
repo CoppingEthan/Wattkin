@@ -966,7 +966,17 @@ public sealed partial class HardwareService : IDisposable
                 CycleProfile();
                 break;
             case MsiHotkey.CoolerBoost:
-                if (ec?.GetCoolerBoost() is { } boost)
+                if (ec is not null && ec.FirmwareVersion.StartsWith("15M3EMS1.", StringComparison.OrdinalIgnoreCase))
+                {
+                    // On this Vector firmware, Fn + Up toggles Cooler Boost in the EC.
+                    // Toggling it again here undoes the keypress. Follow the hardware state.
+                    Thread.Sleep(150);
+                    if (ec.GetCoolerBoost() is { } state)
+                    {
+                        Osd?.Invoke(state ? "Cooler Boost on" : "Cooler Boost off");
+                    }
+                }
+                else if (ec?.GetCoolerBoost() is { } boost)
                 {
                     ec.SetCoolerBoost(!boost);
                     Osd?.Invoke(!boost ? "Cooler Boost on" : "Cooler Boost off");
