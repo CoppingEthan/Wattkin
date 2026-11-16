@@ -137,9 +137,13 @@
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <TextBlock Text="Name" Style="{StaticResource Lc.Label}" /><TextBox x:Name="PName" Grid.Column="1" /></Grid>
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                    <TextBlock Text="CPU power (EC)" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PShift" Grid.Column="1" /></Grid>
+                                    <TextBlock Text="CPU power (EC)" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PShift" Grid.Column="1" SelectionChanged="OnProfileShiftChanged" /></Grid>
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <TextBlock Text="Fans" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PFan" Grid.Column="1" SelectionChanged="OnProfileFanChanged" /></Grid>
+                                <TextBlock x:Name="SilentFanPowerWarning" Style="{StaticResource Lc.Hint}"
+                                           Foreground="#9A7400" Margin="180,0,0,6"
+                                           Visibility="Collapsed" TextWrapping="Wrap"
+                                           Text="Silent fan mode may also reduce the GPU power limit. Use Auto or a custom fan curve to retain higher GPU performance." />
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <TextBlock Text="Windows power mode" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PWindows" Grid.Column="1" SelectionChanged="OnProfileWindowsOrEppChanged" /></Grid>
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
@@ -159,6 +163,10 @@
                                     <TextBlock Text="Display refresh rate" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PRefresh" Grid.Column="1" /></Grid>
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <TextBlock Text="Keyboard light" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PKeyboard" Grid.Column="1" /></Grid>
+                                <TextBlock x:Name="EcoKeyboardProfileWarning" Style="{StaticResource Lc.Hint}"
+                                           Foreground="#C62828" Margin="180,0,0,6"
+                                           Visibility="Collapsed" TextWrapping="Wrap"
+                                           Text="Eco mode forces the keyboard backlight off. Keyboard light settings cannot override it." />
                                 <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                     <Button Content="Save" Click="OnProfileSave" Margin="0,0,8,0" MinWidth="80" />
                                     <Button Content="Save and apply now" Click="OnProfileApply" />
@@ -221,6 +229,10 @@
                     <Border Style="{StaticResource Lc.Card}">
                         <StackPanel>
                             <TextBlock Text="Keyboard backlight" Style="{StaticResource Lc.Section}" />
+                            <TextBlock x:Name="EcoKeyboardActiveWarning" Style="{StaticResource Lc.Hint}"
+                                       Foreground="#C62828" Margin="0,0,0,10"
+                                       Visibility="Collapsed" TextWrapping="Wrap"
+                                       Text="Eco CPU power mode is active and forces the keyboard backlight off. Change CPU power (EC) mode to control the backlight." />
                             <WrapPanel x:Name="KbLevelPanel" Margin="0,0,0,10" />
                             <!-- Colour: only where the keys are lit by an RGB controller over USB (Mystic Light). -->
                             <StackPanel x:Name="KbColorSection" Margin="0,0,0,10">
