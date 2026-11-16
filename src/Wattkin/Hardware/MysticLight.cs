@@ -28,7 +28,7 @@ public readonly record struct LightColor(byte R, byte G, byte B)
 public sealed record MysticLightInfo(string Path, string Product, ushort UsagePage, int FeatureReportLength)
 {
     /// <summary>The report layout the protocol needs: MSI's usage page 0x00FF and 64-byte feature reports.</summary>
-    public bool Usable => UsagePage == MysticLight.UsagePage && FeatureReportLength == MysticLight.ReportLength;
+    public bool Usable => FeatureReportLength == MysticLight.ReportLength && (UsagePage == MysticLight.UsagePage || (UsagePage == 0xFF00 && Path.Contains("vid_1462&pid_1603", StringComparison.OrdinalIgnoreCase)));
 
     /// <summary>
     /// This controller lights the keys, not the EC's register: the Stealth 15M A11UEK's 1462:1562 (seen to
@@ -41,7 +41,7 @@ public sealed record MysticLightInfo(string Path, string Product, ushort UsagePa
 }
 
 /// <summary>
-/// The keyboard light on MSI laptops whose keys are lit by a "MysticLight MS-156x" USB controller
+/// The keyboard light on MSI laptops whose keys are lit by a "MysticLight" USB controller
 /// instead of the embedded controller. On the Stealth 15M A11UEK it is 1462:1562 ("MysticLight
 /// MS-1562", single-zone RGB): EC register 0xD3 takes and reads back the levels (self-test 1.2.0) but
 /// nothing is wired to it, which is why neither Wattkin's EC path nor YAMDCC lit the keys, while
@@ -55,7 +55,12 @@ public sealed record MysticLightInfo(string Path, string Product, ushort UsagePa
 /// (its minimum), and off is mode 0 with the rest unchanged. Wattkin sends those packets byte for byte.
 /// The owner's controller declares the same reports (usage page 0x00FF, 64-byte feature report 0x02).
 ///
-/// The controller doesn't report its state (a GET_FEATURE of report 0x02 returns zeros), so Wattkin
+/// For the MS-1603, MSI Center uses a different pair of reports (zone mask, then colour),
+/// verified on a 24-zone Vector 16 by MSI-KeyLight. Its levels here use RGB scaling, not a
+/// verified hardware brightness opcode. Changing a level replaces multi-zone lighting with
+/// one static colour. Do not assume this is safe to run concurrently with MSI Center/OpenRGB.
+///
+/// The older 156x controller doesn't report its state (a GET_FEATURE of report 0x02 returns zeros), so Wattkin
 /// keeps the level and colour in settings.json and sends them again at startup and after sleep. No
 /// administrator rights or driver needed: Windows' own HID class driver carries the report.
 /// </summary>
@@ -70,7 +75,7 @@ internal sealed class MysticLight : IDisposable
     private const byte ModeSteady = 1;
 
     /// <summary>The product IDs OpenRGB drives with this protocol (MSIMysticLightControllerDetect.cpp).</summary>
-    private static readonly string[] HardwareIds = ["vid_1462&pid_1562", "vid_1462&pid_1563", "vid_1462&pid_1564"];
+    private static readonly string[] HardwareIds = ["vid_1462&pid_1562", "vid_1462&pid_1563", "vid_1462&pid_1564", "vid_1462&pid_1603"];
 
     /// <summary>
     /// Off, Low, Mid, High: Low is MSI Center's lowest step, Mid its middle one, High full brightness.
@@ -106,6 +111,38 @@ internal sealed class MysticLight : IDisposable
         packet[8] = color.B;
         MsiPalette.CopyTo(packet, 9);
         return packet;
+    }
+
+    /// <summary>
+    /// MS-1603 (24-zone RGB): MSI Center selects zones with one feature report and applies a
+    /// colour with a second. This is deliberately a separate packet format from MS-1562/3/4.
+    /// Source: MSI-KeyLight's MSI Center USB HID captures for 1462:1603.
+    ///
+    /// The current UI controls one colour for the entire keyboard. Select all 24 zones with
+    /// mask 0x00FFFFFF. For Off/Low/Mid/High, scale RGB rather than guessing which MS-1603
+    /// field represents hardware brightness; this replaces any prior per-zone colour scheme.
+    /// </summary>
+    public static (byte[] Mask, byte[] Color) Packet1603(int level, LightColor color)
+    {
+        level = Math.Clamp(level, 0, MaxLevel);
+        var mask = new byte[ReportLength];
+        mask[0] = ReportId;
+        mask[1] = 0x01;
+        mask[2] = 0xFF;
+        mask[3] = 0xFF;
+        mask[4] = 0xFF;
+
+        var data = new byte[ReportLength];
+        byte[] prefix = [0x02, 0x02, 0x01, 0x58, 0x02, 0x00, 0x32, 0x08, 0x01, 0x01, 0x00];
+        prefix.CopyTo(data, 0);
+        // Field at offset 14 is 0x64 in MSI Center's captured steady-colour report.
+        data[14] = 0x64;
+        var scale = level switch { 0 => 0, 1 => 33, 2 => 67, _ => 100 };
+        static byte Scaled(byte channel, int percent) => (byte)((channel * percent + 50) / 100);
+        data[11] = data[15] = Scaled(color.R, scale);
+        data[12] = data[16] = Scaled(color.G, scale);
+        data[13] = data[17] = Scaled(color.B, scale);
+        return (mask, data);
     }
 
     /// <summary>
@@ -148,13 +185,33 @@ internal sealed class MysticLight : IDisposable
     /// <param name="log">False for auto-off's frequent switching: then only a failure is logged.</param>
     public bool Set(int level, LightColor color, bool log = true)
     {
-        var packet = Packet(level, color);
+        var is1603 = Info.Path.Contains("vid_1462&pid_1603", StringComparison.OrdinalIgnoreCase);
+        var packet = is1603 ? null : Packet(level, color);
         bool ok;
         int error;
         lock (_gate)
         {
-            ok = !_handle.IsClosed && Hid.HidD_SetFeature(_handle, packet, packet.Length);
-            error = ok ? 0 : Marshal.GetLastWin32Error();
+            if (_handle.IsClosed)
+            {
+                ok = false;
+                error = 6; // ERROR_INVALID_HANDLE
+            }
+            else if (is1603)
+            {
+                var (mask, data) = Packet1603(level, color);
+                // Keep the selection + write together: another thread must not interleave them.
+                ok = Hid.HidD_SetFeature(_handle, mask, mask.Length);
+                if (ok)
+                {
+                    ok = Hid.HidD_SetFeature(_handle, data, data.Length);
+                }
+                error = ok ? 0 : Marshal.GetLastWin32Error();
+            }
+            else
+            {
+                ok = Hid.HidD_SetFeature(_handle, packet!, packet!.Length);
+                error = ok ? 0 : Marshal.GetLastWin32Error();
+            }
         }
 
         if (log || !ok)
