@@ -141,7 +141,7 @@
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <TextBlock Text="Fans" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PFan" Grid.Column="1" SelectionChanged="OnProfileFanChanged" /></Grid>
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                    <TextBlock Text="Windows power mode" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PWindows" Grid.Column="1" /></Grid>
+                                    <TextBlock Text="Windows power mode" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PWindows" Grid.Column="1" SelectionChanged="OnProfileWindowsOrEppChanged" /></Grid>
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <TextBlock Text="CPU turbo boost" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PCpuBoost" Grid.Column="1" /></Grid>
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
@@ -149,7 +149,11 @@
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <TextBlock Text="Max CPU frequency" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PMaxFreq" Grid.Column="1" /></Grid>
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                                    <TextBlock Text="Performance or efficiency" Style="{StaticResource Lc.Label}" ToolTip="Windows' energy performance preference (EPP)" /><ComboBox x:Name="PEpp" Grid.Column="1" /></Grid>
+                                    <TextBlock Text="Performance or efficiency" Style="{StaticResource Lc.Label}" ToolTip="Windows' energy performance preference (EPP)" /><ComboBox x:Name="PEpp" Grid.Column="1" SelectionChanged="OnProfileWindowsOrEppChanged" /></Grid>
+                                <TextBlock x:Name="WindowsEppConflictWarning" Style="{StaticResource Lc.Hint}"
+                                           Foreground="#9A7400" Margin="180,0,0,6"
+                                           Visibility="Collapsed" TextWrapping="Wrap"
+                                           Text="When Windows power mode and Performance or efficiency (EPP) are both set, EPP may not take effect or may change unexpectedly. For more predictable behavior, set one of them to Unchanged." />
                                 <TextBlock Style="{StaticResource Lc.Hint}" Margin="180,0,0,0" TextWrapping="Wrap" Text="Turbo, max state, frequency and performance-or-efficiency are settings of Windows' active power plan. A max state below 100% also stops turbo; a frequency cap keeps some turbo. Performance-or-efficiency is how eagerly the processor speeds up for everyday work (Windows' 'Best power efficiency' mode may override it on battery)." />
                                 <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="180" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                     <TextBlock Text="Display refresh rate" Style="{StaticResource Lc.Label}" /><ComboBox x:Name="PRefresh" Grid.Column="1" /></Grid>
