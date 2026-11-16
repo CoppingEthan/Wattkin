@@ -248,7 +248,7 @@ public partial class SimpleSettings : UserControl
         }
 
         GpuText.Text = gpu!.SwitchPending
-            ? gpu.Requested == FirmwareGpuMode.Hybrid ? "The RTX comes back after a restart." : "The RTX switches off after a restart."
+            ? gpu.Requested switch { FirmwareGpuMode.Hybrid => "The RTX comes back after a restart.", FirmwareGpuMode.Discrete => "Discrete only starts after a restart.", _ => "The RTX switches off after a restart." }
             : gpu.Current == FirmwareGpuMode.Hybrid
                 ? "Hybrid: the RTX is there when an app needs it, and sleeps by itself otherwise."
                 : "Integrated: the RTX is switched off. Choose Hybrid to use it (takes a restart).";

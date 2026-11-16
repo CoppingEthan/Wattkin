@@ -371,6 +371,25 @@ public sealed class AppSettings
     }
 
     /// <summary>A fan profile was renamed (or deleted, <paramref name="newName"/> null): profiles that used it follow.</summary>
+    /// <summary>
+    /// Quiet and Cool as Wattkin ships them (fitted to the laptop's own curve where its table can't take
+    /// the shipped ones): an edited one is replaced, a deleted one comes back. Other fan profiles stay.
+    /// </summary>
+    public void RestoreDefaultFanProfiles(FanCurves? laptop)
+    {
+        var restored = FanProfile.Defaults();
+        if (laptop is not null)
+        {
+            foreach (var f in restored.Where(f => !f.Speeds.Fits(laptop)))
+            {
+                f.Speeds = f.Name == "Quiet" ? FanSpeeds.Quiet(laptop) : FanSpeeds.Cool(laptop);
+            }
+        }
+
+        bool IsDefault(FanProfile f) => restored.Any(d => string.Equals(d.Name, f.Name, StringComparison.OrdinalIgnoreCase));
+        FanProfiles = [.. restored, .. FanProfiles.Where(f => !IsDefault(f))];
+    }
+
     public void RenameFanProfile(string oldName, string? newName)
     {
         foreach (var p in Profiles.Where(p => string.Equals(p.FanProfileName, oldName, StringComparison.OrdinalIgnoreCase)))

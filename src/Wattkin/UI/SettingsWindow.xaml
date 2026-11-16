@@ -186,7 +186,8 @@
                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,8,0,0">
                         <Button x:Name="FanNewButton" Content="New" Click="OnFanProfileNew" Margin="0,0,6,0" IsEnabled="False" />
                         <Button x:Name="FanDuplicateButton" Content="Duplicate" Click="OnFanProfileDuplicate" Margin="0,0,6,0" IsEnabled="False" />
-                        <Button x:Name="FanDeleteButton" Content="Delete" Click="OnFanProfileDelete" />
+                        <Button x:Name="FanDeleteButton" Content="Delete" Click="OnFanProfileDelete" Margin="0,0,6,0" />
+                        <Button x:Name="FanRestoreButton" Content="Restore Quiet and Cool" Click="OnFanProfileRestore" ToolTip="Puts Wattkin's own Quiet and Cool fan profiles back as they came" />
                     </StackPanel>
                     <ListBox x:Name="FanProfileList" SelectionChanged="OnFanProfileSelected" />
                 </DockPanel>
@@ -304,10 +305,11 @@
                         <StackPanel>
                             <TextBlock Text="Firmware GPU mode: needs a restart" Style="{StaticResource Lc.Section}" />
                             <TextBlock x:Name="FirmwareMode" Style="{StaticResource Lc.Value}" Margin="0,0,0,6" />
-                            <TextBlock Style="{StaticResource Lc.Hint}" Margin="0,0,0,8" Text="In Hybrid an idle RTX powers itself down, so you can use it in bursts without restarting. 'Integrated only' removes it from the system at power-on, so nothing can wake it; HDMI / USB-C outputs wired to it stop working. This is the same switch MSI Center uses: the laptop shuts down fully and starts again in the new mode." />
+                            <TextBlock Style="{StaticResource Lc.Hint}" Margin="0,0,0,8" Text="In Hybrid an idle RTX powers itself down, so you can use it in bursts without restarting. 'Integrated only' removes it from the system at power-on, so nothing can wake it; HDMI / USB-C outputs wired to it stop working. 'Discrete only', where the laptop offers it, runs the screen from the RTX all the time: best for games, worst for battery. Wattkin's Discrete only hasn't been tried on a real laptop yet. This is the same switch MSI Center uses: the laptop shuts down fully and starts again in the new mode." />
                             <StackPanel Orientation="Horizontal">
                                 <Button x:Name="ModeHybrid" Content="Switch to Hybrid (RTX available)" Click="OnModeHybrid" Margin="0,0,8,0" />
-                                <Button x:Name="ModeIntegrated" Content="Switch to Integrated only" Click="OnModeIntegrated" />
+                                <Button x:Name="ModeIntegrated" Content="Switch to Integrated only" Click="OnModeIntegrated" Margin="0,0,8,0" />
+                                <Button x:Name="ModeDiscrete" Content="Switch to Discrete only (untested)" Click="OnModeDiscrete" Visibility="Collapsed" />
                             </StackPanel>
                         </StackPanel>
                     </Border>

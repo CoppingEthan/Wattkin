@@ -755,11 +755,14 @@ public partial class SettingsWindow : Window
                 FirmwareMode.Text = $"Current: {Describe(gpu.Current)}" + (gpu.SwitchPending ? $" · switching to {Describe(gpu.Requested)} at the next full shutdown" : "");
                 ModeHybrid.IsEnabled = state.Caps?.CanSwitchGpuMode == true && gpu.SwitchSupported && gpu.Requested != FirmwareGpuMode.Hybrid;
                 ModeIntegrated.IsEnabled = state.Caps?.CanSwitchGpuMode == true && gpu.SwitchSupported && gpu.IntegratedSupported && gpu.Requested != FirmwareGpuMode.Integrated;
+                // Only where the firmware says it has the mode (or is in it already).
+                ModeDiscrete.Visibility = gpu.SwitchSupported && (gpu.DiscreteSupported || gpu.Current == FirmwareGpuMode.Discrete) ? Visibility.Visible : Visibility.Collapsed;
+                ModeDiscrete.IsEnabled = state.Caps?.CanSwitchGpuMode == true && gpu.SwitchSupported && gpu.DiscreteSupported && gpu.Requested != FirmwareGpuMode.Discrete;
             }
             else
             {
                 FirmwareMode.Text = state.GpuProblem ?? (Elevation.IsElevated ? "Reading…" : "Needs administrator rights.");
-                ModeHybrid.IsEnabled = ModeIntegrated.IsEnabled = false;
+                ModeHybrid.IsEnabled = ModeIntegrated.IsEnabled = ModeDiscrete.IsEnabled = false;
             }
 
             ElevationText.Text = Elevation.IsElevated
@@ -787,7 +790,7 @@ public partial class SettingsWindow : Window
     {
         FirmwareGpuMode.Hybrid => "Hybrid (RTX available, sleeps when idle)",
         FirmwareGpuMode.Integrated => "Integrated only (RTX powered off)",
-        _ => "Discrete only",
+        _ => "Discrete only (the RTX runs the screen all the time)",
     };
 
     private void RefreshCalibration()
@@ -1278,6 +1281,25 @@ public partial class SettingsWindow : Window
         }
     }
 
+    /// <summary>Wattkin's own Quiet and Cool back as they came; fan profiles the user made stay.</summary>
+    private async void OnFanProfileRestore(object sender, RoutedEventArgs e)
+    {
+        if (MessageBox.Show(this, "Put Wattkin's Quiet and Cool fan profiles back as they came? Changes you made to those two are lost. Your other fan profiles stay.", "Fan profiles", MessageBoxButton.OKCancel) != MessageBoxResult.OK)
+        {
+            return;
+        }
+
+        var inUse = FanProfile.Defaults().Any(f => UsedByActiveProfile(f.Name));
+        App.Current.Store.Update(s => s.RestoreDefaultFanProfiles(_firmwareCurves));
+        _editingFan = null;
+        RefreshFanProfileList();
+        OnFanProfileSelected(null, null); // the editor may be showing one of the two
+        if (inUse)
+        {
+            await App.Current.Hardware.ApplyProfileAsync(App.Current.Store.Current.ActiveProfile);
+        }
+    }
+
     private async void OnFanProfileSave(object sender, RoutedEventArgs e)
     {
         if (_editingFan is not { } fan)
@@ -1610,9 +1632,11 @@ public partial class SettingsWindow : Window
 
     private async void OnModeIntegrated(object sender, RoutedEventArgs e) => await SwitchModeSafe(FirmwareGpuMode.Integrated);
 
+    private async void OnModeDiscrete(object sender, RoutedEventArgs e) => await SwitchModeSafe(FirmwareGpuMode.Discrete);
+
     private async Task SwitchModeSafe(FirmwareGpuMode mode)
     {
-        ModeHybrid.IsEnabled = ModeIntegrated.IsEnabled = false;
+        ModeHybrid.IsEnabled = ModeIntegrated.IsEnabled = ModeDiscrete.IsEnabled = false;
         try
         {
             await SwitchMode(mode);
@@ -1631,6 +1655,14 @@ public partial class SettingsWindow : Window
     private async Task SwitchMode(FirmwareGpuMode mode)
     {
         var description = Describe(mode);
+        // The firmware says it has this mode and the steps are MSI Center's, but no one has run Wattkin's on a real laptop yet.
+        if (mode == FirmwareGpuMode.Discrete && MessageBox.Show(this,
+                "Discrete only hasn't been tested on a real laptop yet.\n\nWattkin uses the same firmware switch as for Hybrid and Integrated only, and your laptop's firmware says it supports this mode, but you would be the first to try it. If the laptop doesn't come back as expected, MSI's reset (off, unplugged, hold the power button for 30 seconds) puts the firmware back to its defaults.\n\nGo on?",
+                "GPU mode: untested", MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK)
+        {
+            return;
+        }
+
         if (MessageBox.Show(this,
                 $"Switch the GPU to {description}?\n\nThis is the same firmware switch MSI Center uses. It takes effect after the laptop fully shuts down and starts again.",
                 "GPU mode", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK)

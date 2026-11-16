@@ -155,6 +155,24 @@ public class FanCurveTests
     }
 
     [Fact]
+    public void RestoringBringsQuietAndCoolBackAndKeepsTheUsersOwn()
+    {
+        var s = new Wattkin.Settings.AppSettings();
+        s.FanProfiles = [new() { Name = "quiet", Speeds = new FanSpeeds { Cpu = [0, 0, 30, 30, 40, 60], Gpu = [0, 0, 20, 25, 33, 50] } }, new() { Name = "Mine", Speeds = FanSpeeds.Cool() }]; // Quiet edited, Cool deleted
+        s.RestoreDefaultFanProfiles(Prestige());
+        Assert.Equal(["Quiet", "Cool", "Mine"], s.FanProfiles.Select(f => f.Name));
+        Assert.Equal(FanSpeeds.Quiet().Cpu, s.FindFanProfile("Quiet")!.Speeds.Cpu);
+        Assert.Equal(FanSpeeds.Cool().Gpu, s.FindFanProfile("Cool")!.Speeds.Gpu);
+
+        s.RestoreDefaultFanProfiles(Katana()); // a table the shipped ones don't fit: rebuilt from the laptop's curve
+        Assert.Equal(FanSpeeds.Quiet(Katana()).Cpu, s.FindFanProfile("Quiet")!.Speeds.Cpu);
+        Assert.True(s.FindFanProfile("Cool")!.Speeds.Fits(Katana()));
+
+        s.RestoreDefaultFanProfiles(null); // table not read: as shipped
+        Assert.Equal(FanSpeeds.Cool().Cpu, s.FindFanProfile("Cool")!.Speeds.Cpu);
+    }
+
+    [Fact]
     public void OnlyUneditedShippedFanProfilesAreRefitted()
     {
         var prestige = new Wattkin.Settings.AppSettings();
